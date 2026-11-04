@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+# prior-pose-refine: refine approximate camera poses, focal length and lens distortion with COLMAP,
+# starting from a prior model, and write a 3DGS training dataset.
+# See README.md for usage and docs/method.md for the method.
+set -euo pipefail
+
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+usage() {
+  cat <<'EOF'
+usage: prior-pose-refine SCAN_DIR OUT_DIR [options]
+
+SCAN_DIR holds images/ and a prior model in sparse/0/{images,cameras,points3D}.bin:
+approximate poses, intrinsics and 3D points, in metres.
+
+options
+  --images DIR          images to use (default: SCAN_DIR/images)
+  --prior-model DIR     prior COLMAP model (default: SCAN_DIR/sparse/0)
+  --mode fast|global    fast: start from the prior poses and bundle-adjust (default)
+                        global: COLMAP global_mapper with the gravity direction, then align to the prior poses
+  --rounds N            triangulate + bundle-adjust rounds in fast mode (default: 3)
+  --camera-model M      RAD_TAN_THIN_PRISM_FISHEYE, OPENCV_FISHEYE or OPENCV
+                        (default: RAD_TAN_THIN_PRISM_FISHEYE in fast mode, OPENCV in global mode)
+  --ba-iterations N     bundle_adjuster iterations per round (default: 15)
+  --init-points sfm|merge
+                        points3D.bin of the training dataset: merge = the triangulated points plus the
+                        points of the prior model, mapped into the model's frame (default when the prior
+                        model has points3D.bin), sfm = the triangulated points only (default otherwise)
+  --matcher covis|sequential
+                        covis: pairs from the prior poses + point covisibility (default)
+                        sequential: COLMAP sequential_matcher, for prior models without points
+  --top-k N             covisible partners per image (default: 25)
+  --seq N               neighbours in capture order added per image (default: 3)
+  --overlap N           sequential_matcher overlap (default: 20)
+  --gpu N               GPU index (default: 0)
+  --gpu-workers N       SIFT extractors on that GPU (default: 3)
+  --max-features N      SIFT features per image (default: 4096)
+  --align-max-error M   model_aligner inlier threshold in metres (default: 0.1)
+  --min-obs N           frames with fewer observations keep their prior pose (default: 20)
+  --python PATH         Python with numpy + scipy (default: $PYTHON or python3)
+  --force               overwrite OUT_DIR (must not overlap the inputs)
+  -h, --help            this help
+EOF
+}
+
+die() { echo "error: $*" >&2; exit 1; }
+
+# Normalize decimal integers before Bash arithmetic and COLMAP's integer options.
+check_integer() {
+  local option=$1 variable=$2 minimum=$3 value=${!2}
+  [[ $value =~ ^[0-9]+$ && ${#value} -le 10 ]] \
+    || die "$option must be an integer between $minimum and 2147483647"
+  value=$((10#$value))
+  (( value >= minimum && value <= 2147483647 )) \
+    || die "$option must be an integer between $minimum and 2147483647"
+  printf -v "$variable" '%d' "$value"
+}
+
+paths_overlap() {
+  [[ $1 == / || $2 == / || $1 == "$2" || $1 == "$2/"* || $2 == "$1/"* ]]
+}
+
+[[ $# -ge 1 && ( $1 == -h || $1 == --help ) ]] && { usage; exit 0; }
+[[ $# -lt 2 ]] && { usage; exit 1; }
+SCAN=$(realpath -e -- "$1"); OUT=$(realpath -m -- "$2"); shift 2
+IMAGES=$SCAN/images; PRIOR=$SCAN/sparse/0; MODE=fast; ROUNDS=3; MATCHER=covis; TOP_K=25; SEQ=3
+OVERLAP=20; GPU=0; WORKERS=3; MAX_FEATURES=4096; ALIGN_MAX_ERROR=0.1; PY=${PYTHON:-python3}; FORCE=0
+CAMERA_MODEL=; BA_ITERATIONS=15; INIT_POINTS=; MIN_OBS=20
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --images|--prior-model|--mode|--rounds|--camera-model|--ba-iterations|--init-points|--matcher|\
+    --top-k|--seq|--overlap|--gpu|--gpu-workers|--max-features|--align-max-error|--min-obs|--python)
+      [[ $# -ge 2 && -n $2 && $2 != --* && $2 != -h ]] || die "$1 requires a value" ;;
+  esac
+  case $1 in
+    --images) IMAGES=$(realpath -e -- "$2"); shift 2 ;;
+    --prior-model) PRIOR=$(realpath -e -- "$2"); shift 2 ;;
+    --mode) MODE=$2; shift 2 ;;
+    --rounds) ROUNDS=$2; shift 2 ;;
+    --camera-model) CAMERA_MODEL=$2; shift 2 ;;
+    --ba-iterations) BA_ITERATIONS=$2; shift 2 ;;
+    --init-points) INIT_POINTS=$2; shift 2 ;;
+    --matcher) MATCHER=$2; shift 2 ;;
+    --top-k) TOP_K=$2; shift 2 ;;
+    --seq) SEQ=$2; shift 2 ;;
+    --overlap) OVERLAP=$2; shift 2 ;;
+    --gpu) GPU=$2; shift 2 ;;
+    --gpu-workers) WORKERS=$2; shift 2 ;;
+    --max-features) MAX_FEATURES=$2; shift 2 ;;
+    --align-max-error) ALIGN_MAX_ERROR=$2; shift 2 ;;
+    --min-obs) MIN_OBS=$2; shift 2 ;;
+    --python) PY=$2; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1" >&2; usage; exit 1 ;;
+  esac
+done
+
+check_integer --rounds ROUNDS 1
+check_integer --ba-iterations BA_ITERATIONS 1
+check_integer --top-k TOP_K 0
+check_integer --seq SEQ 0
+check_integer --overlap OVERLAP 1
+check_integer --gpu GPU 0
+check_integer --gpu-workers WORKERS 1
+check_integer --max-features MAX_FEATURES 1
+check_integer --min-obs MIN_OBS 0
+[[ $MODE == fast || $MODE == global ]] || die "--mode must be fast or global"
+[[ $MATCHER == covis || $MATCHER == sequential ]] || die "--matcher must be covis or sequential"
+[[ $MATCHER != covis || $TOP_K -gt 0 || $SEQ -gt 0 ]] || die "--top-k and --seq cannot both be zero with --matcher covis"
+if [[ -z $CAMERA_MODEL ]]; then
+  [[ $MODE == fast ]] && CAMERA_MODEL=RAD_TAN_THIN_PRISM_FISHEYE || CAMERA_MODEL=OPENCV
+fi
+[[ $CAMERA_MODEL =~ ^(RAD_TAN_THIN_PRISM_FISHEYE|OPENCV_FISHEYE|OPENCV)$ ]] \
+  || die "--camera-model must be RAD_TAN_THIN_PRISM_FISHEYE, OPENCV_FISHEYE or OPENCV"
+[[ $MODE == fast || $CAMERA_MODEL == OPENCV ]] || die "--mode global supports only --camera-model OPENCV"
+for f in images.bin cameras.bin; do [[ -f $PRIOR/$f ]] || die "missing $PRIOR/$f"; done
+if [[ -z $INIT_POINTS ]]; then
+  [[ $(stat -c %s "$PRIOR/points3D.bin" 2>/dev/null || echo 0) -gt 8 ]] && INIT_POINTS=merge || INIT_POINTS=sfm
+fi
+[[ $INIT_POINTS == sfm || $INIT_POINTS == merge ]] || die "--init-points must be sfm or merge"
+[[ $INIT_POINTS == sfm || -f $PRIOR/points3D.bin ]] || die "--init-points merge needs $PRIOR/points3D.bin"
+[[ -d $IMAGES ]] || die "missing image folder $IMAGES"
+IMAGES=$(realpath -e -- "$IMAGES"); PRIOR=$(realpath -e -- "$PRIOR")
+for input in "$SCAN" "$IMAGES" "$PRIOR"; do
+  if paths_overlap "$OUT" "$input"; then
+    die "OUT_DIR overlaps an input: $input; choose a separate output folder"
+  fi
+done
+[[ $HERE != "$OUT" && $HERE != "$OUT/"* ]] || die "OUT_DIR contains the pipeline directory"
+command -v colmap >/dev/null || die "colmap is not on PATH"
+"$PY" -I -c "import numpy, scipy" 2>/dev/null || die "$PY lacks numpy/scipy; pass --python or set PYTHON (see README)"
+"$PY" -I - "$ALIGN_MAX_ERROR" <<'PY' || die "--align-max-error must be a finite number greater than zero"
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+except ValueError:
+    sys.exit(1)
+sys.exit(not (math.isfinite(value) and value > 0))
+PY
+if [[ -e $OUT ]]; then
+  [[ $FORCE == 1 ]] || die "$OUT exists (use --force to overwrite)"
+  rm -rf "$OUT"
+fi
+
+WORK=$OUT/work; LOGS=$WORK/logs; mkdir -p "$LOGS"
+TOOLS=("$PY" -I "$HERE/prior_pose_refine.py")
+echo -e "stage\tseconds" > "$OUT/timing.tsv"
+
+stage() {  # stage NAME COMMAND...: run, time and log one step
+  local name=$1; shift
+  local t0=$EPOCHREALTIME
+  printf '%-22s' "$name"
+  if ! "$@" > "$LOGS/$name.log" 2>&1; then
+    echo "FAILED"; echo "--- last lines of $LOGS/$name.log" >&2; tail -20 "$LOGS/$name.log" >&2; exit 1
+  fi
+  local secs; secs=$(awk -v a="$t0" -v b="$EPOCHREALTIME" 'BEGIN{printf "%.1f", b-a}')
+  echo -e "$name\t$secs" >> "$OUT/timing.tsv"
+  echo "${secs} s"
+}
+
+echo "prior-pose-refine: mode=$MODE matcher=$MATCHER rounds=$ROUNDS camera=$CAMERA_MODEL init=$INIT_POINTS"
+echo "  scan:   $SCAN"
+echo "  prior:  $PRIOR"
+echo "  images: $IMAGES"
+echo "  out:    $OUT"
+
+stage list_images "${TOOLS[@]}" list-images --prior "$PRIOR" --out "$WORK/image_list.txt"
+stage export_centers "${TOOLS[@]}" export-centers --prior "$PRIOR" --out "$WORK/prior_centers.txt"
+
+GPU_LIST=$(printf "$GPU%.0s," $(seq 1 "$WORKERS")); GPU_LIST=${GPU_LIST%,}
+stage feature_extraction colmap feature_extractor --database_path "$WORK/database.db" --image_path "$IMAGES" \
+  --image_list_path "$WORK/image_list.txt" --ImageReader.camera_model OPENCV --ImageReader.single_camera 1 \
+  --SiftExtraction.max_num_features "$MAX_FEATURES" --FeatureExtraction.max_image_size 8192 \
+  --FeatureExtraction.gpu_index "$GPU_LIST"
+
+if [[ $MATCHER == covis ]]; then
+  stage select_pairs "${TOOLS[@]}" select-pairs --prior "$PRIOR" --out "$WORK/pairs.txt" --top-k "$TOP_K" --seq "$SEQ"
+  stage matching colmap matches_importer --database_path "$WORK/database.db" --match_list_path "$WORK/pairs.txt" \
+    --match_type pairs --FeatureMatching.guided_matching 0 --FeatureMatching.gpu_index "$GPU"
+else
+  stage matching colmap sequential_matcher --database_path "$WORK/database.db" \
+    --SequentialMatching.overlap "$OVERLAP" --SequentialMatching.loop_detection 0 --FeatureMatching.gpu_index "$GPU"
+fi
+
+if [[ $MODE == fast ]]; then
+  stage init_model "${TOOLS[@]}" init-model --prior "$PRIOR" --database "$WORK/database.db" --out "$WORK/init" \
+    --camera-model "$CAMERA_MODEL"
+  model=$WORK/init
+  for r in $(seq 0 $((ROUNDS - 1))); do
+    mkdir -p "$WORK/tri$r" "$WORK/ba$r"
+    stage "triangulate_r$r" colmap point_triangulator --database_path "$WORK/database.db" --image_path "$IMAGES" \
+      --input_path "$model" --output_path "$WORK/tri$r" \
+      --Mapper.ba_global_max_refinements 2 --Mapper.max_extra_param 1e9
+    stage "bundle_adjust_r$r" colmap bundle_adjuster --input_path "$WORK/tri$r" --output_path "$WORK/ba$r" \
+      --BundleAdjustmentCeres.use_gpu 1 --BundleAdjustmentCeres.gpu_index "$GPU" \
+      --BundleAdjustmentCeres.max_num_iterations "$BA_ITERATIONS"
+    model=$WORK/ba$r
+  done
+else
+  stage write_pose_priors "${TOOLS[@]}" write-pose-priors --prior "$PRIOR" --database "$WORK/database.db"
+  mkdir -p "$WORK/mapper"
+  stage global_mapper colmap global_mapper --database_path "$WORK/database.db" --image_path "$IMAGES" \
+    --output_path "$WORK/mapper" --GlobalMapper.ra_use_gravity 1
+  model=$(for d in "$WORK"/mapper/*/; do
+            echo "$(colmap model_analyzer --path "$d" 2>&1 | grep -o 'Registered images: [0-9]*' | grep -o '[0-9]*$') $d"
+          done | sort -n | tail -1 | cut -d' ' -f2)
+  [[ -n $model ]] || die "global_mapper produced no model"
+fi
+
+mkdir -p "$OUT/model"
+stage align colmap model_aligner --input_path "$model" --output_path "$OUT/model" \
+  --ref_images_path "$WORK/prior_centers.txt" --ref_is_gps 0 --alignment_type custom \
+  --alignment_max_error "$ALIGN_MAX_ERROR"
+# BA cannot move frames without observations, so the alignment leaves them off by the model's drift.
+stage restore_prior_poses "${TOOLS[@]}" restore-prior-poses --prior "$PRIOR" --model "$OUT/model" --min-obs "$MIN_OBS"
+
+stage undistort colmap image_undistorter --image_path "$IMAGES" --input_path "$OUT/model" \
+  --output_path "$OUT/dataset" --output_type COLMAP
+mkdir -p "$OUT/dataset/sparse/0"
+mv "$OUT"/dataset/sparse/*.bin "$OUT/dataset/sparse/0/"
+rm -rf "$OUT/dataset/stereo" "$OUT"/dataset/run-colmap-*.sh
+if [[ $INIT_POINTS == merge ]]; then
+  stage merge_points "${TOOLS[@]}" merge-points --prior "$PRIOR" --model "$OUT/dataset/sparse/0" \
+    --out "$OUT/dataset/sparse/0/points3D.bin"
+fi
+
+{
+  echo "== prior-pose-refine report"
+  echo "mode=$MODE matcher=$MATCHER rounds=$ROUNDS camera=$CAMERA_MODEL init=$INIT_POINTS top_k=$TOP_K seq=$SEQ"
+  colmap model_analyzer --path "$OUT/model" 2>&1 | grep -E "Registered images|Points:|Mean reprojection" | sed 's/^.*\] //'
+  echo "refined camera (with distortion):"; "${TOOLS[@]}" print-camera --model "$OUT/model"
+  echo "training camera (undistorted):"; "${TOOLS[@]}" print-camera --model "$OUT/dataset/sparse/0"
+  echo "agreement with the prior poses:"
+  "${TOOLS[@]}" report-agreement --prior "$PRIOR" --model "$OUT/model" --min-obs "$MIN_OBS"
+  [[ $INIT_POINTS == merge ]] && { echo "training init points:"; tail -1 "$LOGS/merge_points.log"; }
+  awk -F'\t' 'NR>1{s+=$2} END{printf "total time: %.1f s (%d min %02d s)\n", s, s/60, s%60}' "$OUT/timing.tsv"
+} | tee "$OUT/report.txt"
+
+cat <<EOF
+
+dataset ready: $OUT/dataset
+train with, for example:
+  LichtFeld-Studio -d $OUT/dataset --max-cap 1000000
+EOF
