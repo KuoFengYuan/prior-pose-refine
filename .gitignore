@@ -1,0 +1,24 @@
+# machine-specific settings
+local.env
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.coverage
+htmlcov/
+# pipeline outputs and logs
+*_opt/
+work/
+*.log
+# local credentials and editor settings
+.env
+.env.*
+.vscode/
+.idea/
+# comparison figures kept locally because they include people or nameplates
+docs/images/radtan_vs_opencv_most_frame_00049.jpg
+docs/images/radtan_vs_opencv_median_frame_00506.jpg
+docs/images/radtan_vs_opencv_least_frame_00305.jpg
+docs/images/fast_vs_colmap_frame_00377.jpg
