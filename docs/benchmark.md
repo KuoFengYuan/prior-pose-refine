@@ -4,14 +4,14 @@
 
 ## About this data
 
-These are the author's own experiments, run while the tool was developed in October 2026. The scans themselves are not published. This section explains how they were captured and evaluated, so that the numbers can be read correctly and the evaluation can be repeated on your own data.
+These are the author's own experiments, run during development in October and November 2026. The scans themselves are not published. This section explains how they were captured and evaluated, so that the numbers can be read correctly and the evaluation can be repeated on your own data.
 
 ### Scans
 
 | | Scan 1 (first scan) | Scan 2 (second scan) |
 |---|---|---|
 | ID | `scan_20261014_122607_B9A64C` | `scan_20261016_154038_063C40` |
-| Used in | Sections 1–7 and 9 | Sections 8 and 9 |
+| Used in | Sections 1–7 and 9 | Sections 4.1, 8 and 9 |
 | Scene | indoor office | the same office |
 | Phone | iPhone 18 Pro (`iPhone19,2`), iOS 27.0.1 | the same phone |
 | Capture app | [Splatify-Anything](https://github.com/KuoFengYuan/splatify-anything), walking through the room while it records | the same app |
@@ -29,7 +29,7 @@ The capture app drops images it cannot pose; only the posed images are used.
 - **ARKit + LichtFeld Pose Opt**: the same data, with camera-pose optimisation during training. Pose Opt is a local modification of LichtFeld Studio that is not part of its releases; the row is for reference only.
 - **COLMAP from scratch**: COLMAP's own pipeline (vocabulary-tree matching and global_mapper) on the same images, without the input poses.
 - **v1**: the 10/15 version of this tool. OPENCV camera model; each BA round runs until COLMAP's default convergence criteria are met.
-- **v2**: the 10/16 version, which is the current default. RAD_TAN_THIN_PRISM_FISHEYE camera model, BA capped at 15 iterations, 2 refinement passes inside triangulation.
+- **v2**: the 10/16 version used in the October comparisons. RAD_TAN_THIN_PRISM_FISHEYE camera model, BA capped at 15 iterations, 2 refinement passes inside triangulation.
 
 ### Evaluation setup
 
@@ -58,11 +58,11 @@ The capture app drops images it cannot pose; only the posed images are used.
 | v1 (BA × 3), re-run with the pipeline script on 10/16 | 4:23 | 28.395 | 0.9178 | 0.1522 |
 | v2 speed-ups only (`--camera-model OPENCV`) | 3:03 | 28.410 | 0.9179 | 0.1521 |
 | v2, 2 rounds (`--rounds 2`) | 2:30 | 30.633 | 0.9491 | 0.1321 |
-| **v2, 3 rounds = this tool's default** | **3:30** | **30.844** | **0.9504** | **0.1309** |
+| **v2, 3 rounds (October default)** | **3:30** | **30.844** | **0.9504** | **0.1309** |
 
 \* Feature extraction and matching use the re-measured times. The other stages keep the original records (the original records were 11:26 and 10:32).
 
-The default pipeline of this tool:
+The October v2 results show the following gains.
 
 - Compared with COLMAP from scratch: PSNR is 2.61 dB higher (all 92 images improve), and COLMAP time is 2.2 times faster.
 - Compared with v1: PSNR is 2.45 dB higher (all 92 images improve), and COLMAP time is 20% lower.
@@ -160,6 +160,21 @@ BA does not stop early because COLMAP defaults to `function_tolerance 0` and ter
 | Gap to converged value | 346″ | 110″ | 31″ | 11″ | 4″ |
 
 Each extra round shrinks the gap to about one third. At 3 rounds it is already within 0.2 px, so a 4th round makes no PSNR difference.
+
+### 4.1 Third-round BA
+
+On November 18, both schedules started from the same saved third triangulation for each scan. Third-round BA times are medians of three runs on an RTX 5070, with GPU utilization recorded and no other compute job. Each output was aligned, undistorted and initialized with SfM and prior points. Each was trained once with LichtFeld (MRNF, 30,000 steps, 1M cap) and evaluated on the same 49 or 189 held-out images. Training times include evaluation.
+
+| Images | BA caps | Third BA (s) | Training (min:sec) | PSNR (dB) ↑ | SSIM ↑ | LPIPS ↓ |
+|---|---|---:|---:|---:|---:|---:|
+| 390 | 15/15/15 | 14.83 | 10:41 | 35.262 | 0.97460 | 0.10697 |
+| 390 | 15/15/10 | 10.92 | 10:56 | 35.257 | 0.97460 | 0.10704 |
+| 1,505 | 15/15/15 | 68.75 | 11:36 | 30.573 | 0.93663 | 0.13942 |
+| 1,505 | 15/15/10 | 49.16 | 11:28 | 30.606 | 0.93677 | 0.13921 |
+
+Limiting the third BA to 10 saved 3.91 s on the 390-image scan and 19.59 s on the 1,505-image scan. The PSNR differences (−0.005 and +0.033 dB) are within the measured 0.1 dB repeatability margin.
+
+On the larger scan, after a similarity fit, the 95th percentile of the camera-center difference was 0.010 mm and the rotation difference was 0.52 arcseconds. The two largest rotations were on the first two images (64 and 71 arcseconds), with a maximum center difference of 0.78 mm. Their mean reprojection errors increased by 0.0065 and 0.0052 px. For pose comparisons that need the previous iteration budget, use `--ba-iterations 15`.
 
 ## 5. Methods tried but not adopted
 

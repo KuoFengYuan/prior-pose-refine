@@ -21,7 +21,8 @@ options
   --rounds N            triangulate + bundle-adjust rounds in fast mode (default: 3)
   --camera-model M      RAD_TAN_THIN_PRISM_FISHEYE, OPENCV_FISHEYE or OPENCV
                         (default: RAD_TAN_THIN_PRISM_FISHEYE in fast mode, OPENCV in global mode)
-  --ba-iterations N     bundle_adjuster iterations per round (default: 15)
+  --ba-iterations N     set the same bundle_adjuster iteration cap for every fast-mode round
+                        (default: 15/15/10 for 3 RAD_TAN_THIN_PRISM_FISHEYE rounds, 15 otherwise)
   --init-points sfm|merge
                         points3D.bin of the training dataset: merge = the triangulated points plus the
                         points of the prior model, mapped into the model's frame (default when the prior
@@ -65,7 +66,7 @@ paths_overlap() {
 SCAN=$(realpath -e -- "$1"); OUT=$(realpath -m -- "$2"); shift 2
 IMAGES=$SCAN/images; PRIOR=$SCAN/sparse/0; MODE=fast; ROUNDS=3; MATCHER=covis; TOP_K=25; SEQ=3
 OVERLAP=20; GPU=0; WORKERS=3; MAX_FEATURES=4096; ALIGN_MAX_ERROR=0.1; PY=${PYTHON:-python3}; FORCE=0
-CAMERA_MODEL=; BA_ITERATIONS=15; INIT_POINTS=; MIN_OBS=20
+CAMERA_MODEL=; BA_ITERATIONS=; INIT_POINTS=; MIN_OBS=20
 while [[ $# -gt 0 ]]; do
   case $1 in
     --images|--prior-model|--mode|--rounds|--camera-model|--ba-iterations|--init-points|--matcher|\
@@ -97,7 +98,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 check_integer --rounds ROUNDS 1
-check_integer --ba-iterations BA_ITERATIONS 1
+if [[ -n $BA_ITERATIONS ]]; then check_integer --ba-iterations BA_ITERATIONS 1; fi
 check_integer --top-k TOP_K 0
 check_integer --seq SEQ 0
 check_integer --overlap OVERLAP 1
@@ -188,14 +189,20 @@ if [[ $MODE == fast ]]; then
   stage init_model "${TOOLS[@]}" init-model --prior "$PRIOR" --database "$WORK/database.db" --out "$WORK/init" \
     --camera-model "$CAMERA_MODEL"
   model=$WORK/init
+  ba_caps=()
   for r in $(seq 0 $((ROUNDS - 1))); do
+    cap=${BA_ITERATIONS:-15}
+    if [[ -z $BA_ITERATIONS && $CAMERA_MODEL == RAD_TAN_THIN_PRISM_FISHEYE && $ROUNDS == 3 && $r == 2 ]]; then
+      cap=10
+    fi
+    ba_caps+=("$cap")
     mkdir -p "$WORK/tri$r" "$WORK/ba$r"
     stage "triangulate_r$r" colmap point_triangulator --database_path "$WORK/database.db" --image_path "$IMAGES" \
       --input_path "$model" --output_path "$WORK/tri$r" \
       --Mapper.ba_global_max_refinements 2 --Mapper.max_extra_param 1e9
     stage "bundle_adjust_r$r" colmap bundle_adjuster --input_path "$WORK/tri$r" --output_path "$WORK/ba$r" \
       --BundleAdjustmentCeres.use_gpu 1 --BundleAdjustmentCeres.gpu_index "$GPU" \
-      --BundleAdjustmentCeres.max_num_iterations "$BA_ITERATIONS"
+      --BundleAdjustmentCeres.max_num_iterations "$cap"
     model=$WORK/ba$r
   done
 else
@@ -229,6 +236,7 @@ fi
 {
   echo "== prior-pose-refine report"
   echo "mode=$MODE matcher=$MATCHER rounds=$ROUNDS camera=$CAMERA_MODEL init=$INIT_POINTS top_k=$TOP_K seq=$SEQ"
+  if [[ $MODE == fast ]]; then (IFS=/; echo "ba_iteration_caps=${ba_caps[*]}"); fi
   colmap model_analyzer --path "$OUT/model" 2>&1 | grep -E "Registered images|Points:|Mean reprojection" | sed 's/^.*\] //'
   echo "refined camera (with distortion):"; "${TOOLS[@]}" print-camera --model "$OUT/model"
   echo "training camera (undistorted):"; "${TOOLS[@]}" print-camera --model "$OUT/dataset/sparse/0"

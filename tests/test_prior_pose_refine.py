@@ -134,6 +134,37 @@ class PipelineInputTests(unittest.TestCase):
         self.assertIn("feature_extractor", self.calls.read_text())
         self.assertIn("rounds=8", result.stdout)
 
+    def test_iteration_caps_passed_to_bundle_adjuster(self):
+        colmap = self.root / "bin" / "colmap"
+        colmap.write_text('''#!/usr/bin/env bash
+if [[ $1 == model_aligner ]]; then exit 99; fi
+if [[ $1 == bundle_adjuster ]]; then
+    while (( $# >= 2 )); do
+        if [[ $1 == --BundleAdjustmentCeres.max_num_iterations ]]; then
+            echo "$2" >> "$PPR_TEST_COLMAP_CALLED"
+            exit 0
+        fi
+        shift
+    done
+    exit 1
+fi
+''')
+        cases = [
+            ([], [15, 15, 10]),
+            (["--ba-iterations", "15"], [15, 15, 15]),
+            (["--ba-iterations", "08"], [8, 8, 8]),
+            (["--rounds", "2"], [15, 15]),
+            (["--rounds", "4"], [15] * 4),
+            (["--camera-model", "OPENCV_FISHEYE"], [15] * 3),
+        ]
+        for options, expected in cases:
+            with self.subTest(options=options):
+                self.calls.unlink(missing_ok=True)
+                # Skip the Python stages and exercise the actual shell dispatch up to alignment.
+                result = self.run_pipeline("--python", "true", *options)
+                self.assertIn("align.log", result.stderr)
+                self.assertEqual([int(n) for n in self.calls.read_text().splitlines()], expected)
+
 
 class GeometryTests(unittest.TestCase):
     def test_similarity_recovers_scale_rotation_and_translation(self):
