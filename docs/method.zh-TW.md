@@ -17,7 +17,7 @@
 | 3 | `prior_pose_refine.py select-pairs` | 用先驗姿態和點雲挑選匹配對(見下方說明) |
 | 4 | `colmap matches_importer` | 只匹配挑出來的影像對，不開 guided matching |
 | 5 | `prior_pose_refine.py init-model` | 建立初始模型：先驗姿態、先驗內參中位數、`--camera-model` 指定的相機(初始值等同沒有畸變的針孔相機)、沒有 3D 點。同時把資料庫裡的相機換成同一個模型，因為 point_triangulator 要求兩者一致 |
-| 6 | `colmap point_triangulator` → `bundle_adjuster`,重複 3 輪 | 三角化：固定姿態，把匹配點變成 3D 點(內部 refinement 2 次)。BA:同時修正姿態、焦距和畸變參數(最多 15 次迭代) |
+| 6 | `colmap point_triangulator` → `bundle_adjuster`,重複 3 輪 | 三角化：固定姿態，把匹配點變成 3D 點(內部 refinement 2 次)。BA:同時修正姿態、焦距和畸變參數（三輪迭代上限依序為 15、15、10 次） |
 | 7 | `colmap model_aligner` | 用相機中心擬合相似變換，把模型對齊回先驗模型的座標系 |
 | 8 | `prior_pose_refine.py restore-prior-poses` | 觀測數少於 `--min-obs`(預設 20)的影像，姿態還原成先驗姿態(見下方說明) |
 | 9 | `colmap image_undistorter` | 去畸變，輸出訓練資料集 |
@@ -52,7 +52,7 @@
 
 這兩個上限是另一個主要的加速來源:
 
-- COLMAP 預設的 BA 要跑 30 到 40 次迭代才會停，但第 10 次左右以後 cost 和內參已經不再變化。上限設 15 次時，姿態和跑完全程完全相同，每輪省約 15 秒。
+- 前兩輪要擬合鏡頭畸變並修正先驗姿態。先前實驗把第一輪降到 10 次時，個別影像的旋轉差達 91 角秒，因此前兩輪都保留 15 次上限。第三輪開始前，相機已做過兩次調整。以 RAD_TAN_THIN_PRISM_FISHEYE 跑三輪時，最後一輪上限降到 10 次。見[第三輪 BA 實測](benchmark.zh-TW.md#41-第三輪-ba)。
 - point_triangulator 內部會再做最多 5 次只修正 3D 點的 BA,接著的 bundle_adjuster 本來就會重做。改成 2 次，每輪省約 13 秒，最後的姿態只差 0.025 px。
 
 ## 對齊(步驟 7)

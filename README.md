@@ -15,7 +15,7 @@ An indoor office scan with iPhone ARKit poses and Livox Mid-360 points (729 pose
 | ARKit poses as exported by the capture app | — | 23.46 dB |
 | COLMAP from scratch (vocab tree + global_mapper) | 7:36 | 28.23 dB |
 | prior-pose-refine with `--camera-model OPENCV` | 3:03 | 28.41 dB |
-| **prior-pose-refine (default)** | **3:30** | **30.84 dB** |
+| **prior-pose-refine (October run, 15-iteration BA cap per round)** | **3:30** | **30.84 dB** |
 
 A second scan (1,505 images, iPhone LiDAR) agrees: 30.55 dB against 28.28 dB for COLMAP from scratch and 23.14 dB for the exported ARKit poses, with a COLMAP time of 7:30 against 17:47. How the scans were captured and evaluated is described in [docs/benchmark.md](docs/benchmark.md#about-this-data).
 
@@ -121,21 +121,21 @@ list_images           0.1 s
 export_centers        0.1 s
 feature_extraction    8.7 s
 select_pairs          1.7 s
-matching              13.8 s
+matching              13.7 s
 init_model            0.2 s
-triangulate_r0        11.4 s
-bundle_adjust_r0      10.0 s
+triangulate_r0        10.9 s
+bundle_adjust_r0      9.9 s
 …
 align                 0.4 s
 restore_prior_poses   0.1 s
-undistort             5.5 s
-merge_points          0.3 s
+undistort             3.0 s
+merge_points          0.4 s
 == prior-pose-refine report
 …
 dataset ready: …/scan_opt/dataset
 ```
 
-- On an RTX 5070, a 390-image scan took 1:46 and an 805-image scan 3:11.
+- On an RTX 5070, the 390-image scan took 97.8 s with the default caps and 102.5 s with `--ba-iterations 15` (one full run each).
 - If the output folder already exists, `prior-pose-refine` stops instead of overwriting it; add `--force` to overwrite.
 - Before writing output, the tool validates option values and resolves symbolic links. `OUT_DIR` must be separate from `SCAN_DIR`, the image folder and the prior model: equal, parent and child paths are rejected, including with `--force`. An output folder containing the pipeline itself is also rejected.
 - Each run writes 1.2 to 2 GB, so check the free disk space first.
@@ -197,7 +197,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 | `--mode fast\|global` | `fast` | `fast`: bundle-adjust starting from the prior poses (recommended). `global`: COLMAP global_mapper with the gravity direction, then alignment; see section 9 |
 | `--rounds N` | `3` | triangulation + bundle-adjustment rounds (fast mode only). 2 rounds are about 60 s faster but lose about 0.2 dB; a 4th round does not help |
 | `--camera-model M` | fast: `RAD_TAN_THIN_PRISM_FISHEYE`<br>global: `OPENCV` | camera model for bundle adjustment and undistortion. `OPENCV_FISHEYE` has fewer parameters and is more conservative (about 0.08 dB lower); `OPENCV` is about 2.4 dB lower. `--mode global` supports only `OPENCV` |
-| `--ba-iterations N` | `15` | iteration cap of each bundle_adjuster run; results stop changing after 15 |
+| `--ba-iterations N` | `15/15/10` for three rounds with the default camera, otherwise `15` | In fast mode, an explicit integer sets the same cap for every round. Use `--ba-iterations 15` to reproduce the previous schedule. |
 | `--init-points sfm\|merge` | `merge` (`sfm` when the prior model has no `points3D.bin`) | initial point cloud of the dataset. `merge` = SfM points plus the points of the prior model; `sfm` = SfM points only. See section 6 |
 | `--matcher covis\|sequential` | `covis` | `covis`: choose matching pairs from the prior poses and point covisibility. `sequential`: COLMAP matching in capture order, for scans without points |
 | `--top-k N` | `25` | covisible partners per image |
@@ -217,22 +217,23 @@ The defaults are the best settings found in the experiments; change them only to
 
 ## 8. Checking the result
 
-Read `OUT_DIR/report.txt`. This is the report of a 390-image scan rerun on 2026-11-04, as a reference for normal values:
+Read `OUT_DIR/report.txt`. This is the report of a 390-image scan rerun on 2026-11-18, as a reference for normal values:
 
 ```
+ba_iteration_caps=15/15/10
 Registered images: 390            ← should equal the number of prior images
-Points: 120528
-Mean reprojection error: 0.690695px
+Points: 120378
+Mean reprojection error: 0.691840px
 refined camera (with distortion):
-camera 1: RAD_TAN_THIN_PRISM_FISHEYE 1920x1440 1363.97 1363.82 963.985 724.283 0.622796 -0.103451 -8.14841 37.5694 -62.5652 36.0914 …
+camera 1: RAD_TAN_THIN_PRISM_FISHEYE 1920x1440 1364.06 1363.92 963.985 724.283 0.622719 -0.102745 -8.15463 37.597 -62.615 36.1211 …
 agreement with the prior poses:
 390/390 prior frames in the model | distance to the prior camera centers: median 1.8 cm, max 3.6 cm | after a similarity
-(scale 1.0000, rotation 0.00 deg): median 1.8 cm, p95 3.3 cm
+(scale 1.0000, rotation 0.00 deg): median 1.8 cm, p95 3.2 cm
 frames with fewer than 20 observations (prior pose kept): 0
 frames more than 10 cm from their prior pose after the similarity: 0
 ```
 
-The rerun took 103.4 s on an RTX 5070, with GPU utilization recorded from an idle start. These are reference values, not exact regression targets: GPU nondeterminism can change the point count by a few hundred and reprojection error by about 0.001 px. Input checks do not establish image quality; improvements in PSNR still require 3DGS evaluation.
+The rerun took 97.8 s on an RTX 5070, with GPU utilization recorded from an idle start. These are reference values, not exact regression targets: GPU nondeterminism can change the point count by a few hundred and reprojection error by about 0.001 px. Input checks do not establish image quality; improvements in PSNR still require 3DGS evaluation.
 
 | Field | Normal | When it is not |
 |---|---|---|
@@ -280,6 +281,7 @@ The default `fast` mode assumes the prior poses are roughly right and only need 
 | `--mode global supports only --camera-model OPENCV` | do not pass another camera model in `global` mode |
 | `Points: 0` in the report | triangulation produced no points. If you changed the pipeline: extraction and matching must use an OPENCV camera (otherwise two-view verification fails for every pair), and point_triangulator needs `--Mapper.max_extra_param 1e9` (otherwise the large high-order coefficients are treated as invalid) |
 | a stage prints `FAILED` | the last 20 lines of its log are printed; the full log is `OUT_DIR/work/logs/<stage>.log` |
+| Third-round BA timing differs from an older run | Check `ba_iteration_caps` in `report.txt` and `bundle_adjust_r2` in `timing.tsv`. An explicit `--ba-iterations` applies to all rounds. |
 | GPU out of memory | lower `--gpu-workers`, for example to 1 |
 | disk full | put `OUT_DIR` on a disk with more space; delete `work/` once the result is checked |
 
@@ -294,7 +296,7 @@ In short: SIFT features → matching pairs chosen from the prior poses and point
 | `prior-pose-refine` | the pipeline |
 | `prior_pose_refine.py` | helper subcommands: read the prior model, choose matching pairs, build the initial model, write priors, restore the prior pose of images with too few observations, check the alignment, merge the initial point cloud. Each runs on its own; see `--help` |
 | `requirements.txt` | Python packages |
-| `tests/test_prior_pose_refine.py` | regression tests for input protection, numeric ranges, geometry, pair selection and COLMAP pose consistency |
+| `tests/test_prior_pose_refine.py` | regression tests for input protection, numeric ranges, per-round BA caps, geometry, pair selection and COLMAP pose consistency |
 | `.github/workflows/checks.yml` | GitHub Actions checks on Python 3.11, 3.12 and 3.13, including the pycolmap round-trip |
 | `local.env.example` | template for the machine-specific paths; copy it to `local.env` (not committed) |
 | `docs/method.md` | how the pipeline works and why |

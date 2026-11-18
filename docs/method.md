@@ -17,7 +17,7 @@ Before removing an existing output or starting a stage, the pipeline checks opti
 | 3 | `prior_pose_refine.py select-pairs` | chooses the matching pairs from the prior poses and points (see below) |
 | 4 | `colmap matches_importer` | matches only the chosen pairs, without guided matching |
 | 5 | `prior_pose_refine.py init-model` | builds the initial model: prior poses, median prior intrinsics, the `--camera-model` camera started as a distortion-free pinhole, no 3D points. It switches the database camera to the same model, because point_triangulator requires the two to agree |
-| 6 | `colmap point_triangulator` → `bundle_adjuster`, 3 rounds | triangulation keeps the poses fixed and turns matches into 3D points (2 internal refinements); bundle adjustment refines poses, focal length and distortion together (at most 15 iterations) |
+| 6 | `colmap point_triangulator` → `bundle_adjuster`, 3 rounds | triangulation keeps the poses fixed and turns matches into 3D points (2 internal refinements); bundle adjustment refines poses, focal length and distortion together (iteration caps of 15, 15 and 10) |
 | 7 | `colmap model_aligner` | aligns the model back to the prior frame with a similarity fitted to the camera centers |
 | 8 | `prior_pose_refine.py restore-prior-poses` | gives images with fewer than `--min-obs` observations (default 20) their prior pose (see below) |
 | 9 | `colmap image_undistorter` | undistorts the images and writes the training dataset |
@@ -52,7 +52,7 @@ The first triangulation uses the prior poses, so some matches have large errors 
 
 These two caps are the other main speed-up:
 
-- COLMAP's default bundle adjustment runs 30 to 40 iterations before it stops, but the cost and the intrinsics stop changing after about 10. With a cap of 15 the poses are identical to a full run, and each round saves about 15 s.
+- The first two rounds fit camera distortion and correct the prior poses. Limiting the first round to 10 iterations previously changed a rotation by up to 91 arcseconds, so both rounds keep a cap of 15. By the third round the default camera has already undergone two adjustments. The three-round RAD_TAN_THIN_PRISM_FISHEYE schedule caps that last solve at 10. See the [third-round measurements](benchmark.md#41-third-round-ba).
 - point_triangulator runs up to 5 more points-only adjustments internally, which the following bundle_adjuster redoes anyway. Capping them at 2 saves about 13 s per round and changes the final poses by 0.025 px.
 
 ## Alignment (step 7)

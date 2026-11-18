@@ -15,7 +15,7 @@
 | 擷取 App 匯出的 ARKit 姿態 | — | 23.46 dB |
 | 純 COLMAP(vocab tree + global_mapper) | 7:36 | 28.23 dB |
 | prior-pose-refine,`--camera-model OPENCV` | 3:03 | 28.41 dB |
-| **prior-pose-refine(預設)** | **3:30** | **30.84 dB** |
+| **prior-pose-refine（10 月實測，每輪 BA 上限 15 次）** | **3:30** | **30.84 dB** |
 
 第二份掃描(1,505 張，iPhone 內建 LiDAR)的結果一致:30.55 dB,純 COLMAP 是 28.28 dB,匯出的 ARKit 姿態是 23.14 dB;COLMAP 時間 7:30 對 17:47。掃描怎麼拍攝、怎麼評估，見 [docs/benchmark.zh-TW.md](docs/benchmark.zh-TW.md#關於這些數據)。
 
@@ -121,21 +121,21 @@ list_images           0.1 s
 export_centers        0.1 s
 feature_extraction    8.7 s
 select_pairs          1.7 s
-matching              13.8 s
+matching              13.7 s
 init_model            0.2 s
-triangulate_r0        11.4 s
-bundle_adjust_r0      10.0 s
+triangulate_r0        10.9 s
+bundle_adjust_r0      9.9 s
 …
 align                 0.4 s
 restore_prior_poses   0.1 s
-undistort             5.5 s
-merge_points          0.3 s
+undistort             3.0 s
+merge_points          0.4 s
 == prior-pose-refine report
 …
 dataset ready: …/scan_opt/dataset
 ```
 
-- 在 RTX 5070 上,390 張影像的掃描花了 1:46,805 張花了 3:11。
+- 在 RTX 5070 上完整重跑 390 張掃描，預設設定耗時 97.8 秒，指定 `--ba-iterations 15` 耗時 102.5 秒（各跑一次）。
 - 輸出資料夾已經存在時會停下來，不會覆蓋，要覆蓋請加 `--force`。
 - 寫入前會檢查選項數值並解析符號連結。`OUT_DIR` 必須和 `SCAN_DIR`、影像資料夾、先驗模型分開；同一路徑、上層與下層路徑都會被拒絕，加 `--force` 也一樣。輸出資料夾包含主程式所在目錄時也會被拒絕。
 - 每次輸出 1.2 到 2 GB,執行前先確認磁碟空間。
@@ -197,7 +197,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 | `--mode fast\|global` | `fast` | `fast`:從先驗姿態出發做 BA(推薦)。`global`:COLMAP global_mapper 加重力方向，再對齊，見第 9 節 |
 | `--rounds N` | `3` | 三角化加 BA 的輪數(只用於 fast)。2 輪快約 60 秒，但少約 0.2 dB;第 4 輪沒有幫助 |
 | `--camera-model M` | fast:`RAD_TAN_THIN_PRISM_FISHEYE`<br>global:`OPENCV` | BA 和去畸變用的相機模型。`OPENCV_FISHEYE` 參數比較少、比較保守(少約 0.08 dB);`OPENCV` 少約 2.4 dB。`--mode global` 只支援 `OPENCV` |
-| `--ba-iterations N` | `15` | 每輪 bundle_adjuster 的迭代上限，15 次以後結果已不再變化 |
+| `--ba-iterations N` | 預設相機跑三輪時為 `15/15/10`，其餘為 `15` | fast 模式下，明確指定整數會讓每輪都用相同上限。加 `--ba-iterations 15` 可重現原本的設定。 |
 | `--init-points sfm\|merge` | `merge`(先驗模型沒有 `points3D.bin` 時為 `sfm`) | 訓練資料集的初始點雲。`merge` = SfM 點加上先驗模型的點；`sfm` = 只用 SfM 點。見第 6 節 |
 | `--matcher covis\|sequential` | `covis` | `covis`:用先驗姿態和點雲共視挑選匹配對。`sequential`:COLMAP 依拍攝順序匹配，沒有點雲時使用 |
 | `--top-k N` | `25` | 每張影像配對的共視影像數 |
@@ -217,22 +217,23 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 
 ## 8. 怎麼判斷結果好不好
 
-看 `OUT_DIR/report.txt`。以下是一份 390 張影像的掃描於 2026-11-04 重跑的報告，可以當作「正常」的參考值:
+看 `OUT_DIR/report.txt`。以下是一份 390 張影像的掃描於 2026-11-18 重跑的報告，可以當作「正常」的參考值:
 
 ```
+ba_iteration_caps=15/15/10
 Registered images: 390            ← 應該等於先驗模型的影像數
-Points: 120528
-Mean reprojection error: 0.690695px
+Points: 120378
+Mean reprojection error: 0.691840px
 refined camera (with distortion):
-camera 1: RAD_TAN_THIN_PRISM_FISHEYE 1920x1440 1363.97 1363.82 963.985 724.283 0.622796 -0.103451 -8.14841 37.5694 -62.5652 36.0914 …
+camera 1: RAD_TAN_THIN_PRISM_FISHEYE 1920x1440 1364.06 1363.92 963.985 724.283 0.622719 -0.102745 -8.15463 37.597 -62.615 36.1211 …
 agreement with the prior poses:
 390/390 prior frames in the model | distance to the prior camera centers: median 1.8 cm, max 3.6 cm | after a similarity
-(scale 1.0000, rotation 0.00 deg): median 1.8 cm, p95 3.3 cm
+(scale 1.0000, rotation 0.00 deg): median 1.8 cm, p95 3.2 cm
 frames with fewer than 20 observations (prior pose kept): 0
 frames more than 10 cm from their prior pose after the similarity: 0
 ```
 
-這次在 RTX 5070 上重跑花了 103.4 秒，從 GPU 閒置時開始並記錄使用率。這些是參考值，不要求逐字一致：GPU 非確定性可能讓點數相差數百點、重投影誤差相差約 0.001 px。輸入檢查不代表畫質驗證；PSNR 是否改善仍須透過 3DGS 評估。
+這次在 RTX 5070 上重跑花了 97.8 秒，從 GPU 閒置時開始並記錄使用率。這些是參考值，不要求逐字一致：GPU 非確定性可能讓點數相差數百點、重投影誤差相差約 0.001 px。輸入檢查不代表畫質驗證；PSNR 是否改善仍須透過 3DGS 評估。
 
 | 項目 | 正常 | 有問題時 |
 |---|---|---|
@@ -280,6 +281,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | `--mode global supports only --camera-model OPENCV` | `global` 模式不要指定其他相機模型 |
 | 報告的 `Points: 0` | 三角化沒有產生任何點。如果是自己改過流程：擷取和匹配時相機必須是 OPENCV(否則幾何驗證會全部失敗);point_triangulator 必須加 `--Mapper.max_extra_param 1e9`(否則高階畸變係數會被當成異常值) |
 | 某個階段 `FAILED` | 程式會印出該階段 log 的最後 20 行，完整 log 在 `OUT_DIR/work/logs/<階段>.log` |
+| 第三輪 BA 耗時與舊版不同 | 查看 `report.txt` 的 `ba_iteration_caps` 與 `timing.tsv` 的 `bundle_adjust_r2`。手動指定的 `--ba-iterations` 會套用到每輪。 |
 | GPU 記憶體不足 | 減少 `--gpu-workers`,例如改成 1 |
 | 磁碟空間不足 | 把 `OUT_DIR` 放在空間足夠的磁碟；確認結果後刪除 `work/` |
 
@@ -294,7 +296,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | `prior-pose-refine` | 主程式，串起整個流程 |
 | `prior_pose_refine.py` | 輔助子指令：讀取先驗模型、挑選匹配對、建立初始模型、寫入先驗、把觀測太少的影像還原成先驗姿態、檢查對齊、合併初始點雲。每個都可以單獨執行，用 `--help` 查看說明 |
 | `requirements.txt` | Python 套件需求 |
-| `tests/test_prior_pose_refine.py` | 輸入保護、數值範圍、幾何、配對選擇及 COLMAP 姿態一致性的回歸測試 |
+| `tests/test_prior_pose_refine.py` | 輸入保護、數值範圍、各輪 BA 上限、幾何、配對選擇及 COLMAP 姿態一致性的回歸測試 |
 | `.github/workflows/checks.yml` | Python 3.11、3.12、3.13 的 GitHub Actions 檢查，包含 pycolmap 往返測試 |
 | `local.env.example` | 本機路徑設定的範本，複製成 `local.env`(不納入版控)後填入 |
 | `docs/method.zh-TW.md` | 流程怎麼運作、為什麼這樣設計 |
