@@ -186,7 +186,7 @@ The metrics are written to `OUT_DIR/train/metrics_report.txt`, and ground-truth/
 
 ### Optional mesh export
 
-After training, the LichtFeld **Mesh Export** tab or standalone worker can fuse LiDAR, rendered splat depth or both into independent, metric triangle tiles. Start with a 2 cm voxel. Bake undistorted photos into the GLB tiles to retain texture detail. The depth cache and geometry can be reused when changing texture resolution. See [installation, options and single-tile rebuilds](docs/mesh.md).
+After training, the LichtFeld **Mesh Export** tab or standalone worker can fuse LiDAR, rendered splat depth or both into independent, metric triangle tiles. For a scan with registered depth maps, set `--scan` and `--merged-depths` to fill gaps in raw measurements on the CPU. Start with a 2 cm voxel. Bake undistorted photos into the GLB tiles to retain texture detail. The depth cache and geometry can be reused when changing texture resolution. See [installation, options and single-tile rebuilds](docs/mesh.md).
 
 ## 7. Options
 
@@ -221,7 +221,7 @@ The defaults are the best settings found in the experiments; change them only to
 
 ## 8. Checking the result
 
-For a mesh export, inspect held-out camera-z error and the fraction of high-confidence depth pixels hit by the mesh. For a baked result, `textures.json` gives the fraction of mesh surface area covered by photos and `timings.json` lists stage times. [Mesh benchmark](docs/benchmark.md#mesh-export).
+For a mesh export, inspect held-out camera-z error and the fraction of high-confidence depth pixels hit by the mesh. For sensor-priority fusion, check that `mesh.json` records `sensor-priority`. For a baked result, `textures.json` gives the fraction of mesh surface area covered by photos and `timings.json` lists stage times. [Mesh benchmark](docs/benchmark.md#mesh-export).
 
 Read `OUT_DIR/report.txt`. This is the report of a 390-image scan rerun on 2026-11-18, as a reference for normal values:
 
@@ -291,6 +291,7 @@ The default `fast` mode assumes the prior poses are roughly right and only need 
 | GPU out of memory | lower `--gpu-workers`, for example to 1 |
 | disk full | put `OUT_DIR` on a disk with more space; delete `work/` once the result is checked |
 | Textured tiles show gray patches | Inspect photographic area coverage in `textures.json` and confirm that the chosen photos and final camera model match. |
+| Merged depths do not match | Check the relative image names, camera-axis depths in millimeters, 16-bit PNG format and undistorted image grid. |
 | Mesh worker reports `No observed surface` | Check final camera coordinates, depth range, the number of views seeing the surface, and the selected tile key. See the [mesh guide](docs/mesh.md). |
 
 ## 11. How it works
@@ -306,7 +307,7 @@ In short: SIFT features → matching pairs chosen from the prior poses and point
 | `requirements.txt` | Python packages |
 | `tests/test_prior_pose_refine.py` | regression tests for input protection, numeric ranges, per-round BA caps, geometry, pair selection and COLMAP pose consistency |
 | `.github/workflows/checks.yml` | GitHub Actions checks on Python 3.11, 3.12 and 3.13, including the pycolmap round-trip |
-| `plugins/tiled_mesh/` | optional LichtFeld mesh export panel, worker and its separate dependencies |
+| `plugins/tiled_mesh/` | optional LichtFeld mesh export panel, depth preparation, fusion and photo-baking worker with its separate dependencies |
 | `local.env.example` | template for the machine-specific paths; copy it to `local.env` (not committed) |
 | `docs/method.md` | how the pipeline works and why |
 | `docs/benchmark.md` | full experiment data and comparison images |

@@ -32,9 +32,21 @@ cp -R plugins/tiled_mesh ~/.lichtfeld/plugins/  # first install
   --source hybrid --voxel 0.02 --bake-textures --output OUT_DIR/mesh
 ```
 
+掃描若已有對位過的合併深度圖，在面板指定 **Original depth scan** 與 **Merged metric depth PNGs (mm)**。**Automatic** 會選用 **Sensor + merged depth**。命令列可直接用 CPU 匯出同樣的結果：
+
+```bash
+"$MESH_PYTHON" -I plugins/tiled_mesh/export_mesh.py export-mesh \
+  --dataset DATASET --scan SCAN_DIR --merged-depths DATASET/depth \
+  --width 512 --voxel 0.015 --tile-cells 128 \
+  --bake-textures --two-sided-textures --output OUT_DIR/mesh-measured
+```
+
+深度圖須為單通道 16 位元 PNG，以毫米儲存沿相機光軸的距離，缺值填 0。像素要對準去畸變影像，沿用相對路徑並把副檔名換成 `.png`，例如 `cam/frame.jpg` 對應 `cam/frame.png`。匯出程式使用最近鄰取樣。缺少合併圖的視角仍保留原始高信心深度，至少一個參與融合的視角須有有效合併深度。用含有這些圖的快取重建時，也會自動選擇 `sensor-priority`。這個模式以實測深度建模、原始照片貼圖，省去渲染 Gaussian 深度的時間。
+
 - `--source splat` 使用訓練後的 Gaussian PLY 或已存檔的訓練專案，以及相符的最終相機。`.licht` 交由 LichtFeld 轉成 PLY。場景和相機須在同一個公尺座標系。若曾縮放、移動節點或合併多個模型，請提供座標一致的相機與 splat。
 - `--source lidar` 只需 `--scan`，可略過 `--splat`。依影像名稱讀取光軸深度（float32）與信心值（uint8），依逐幀 RGB 內參和深度解析度換算光線，只採用信心等級 2。此格式假設深度已與 RGB 對位且共用光心。獨立深度相機須先校正並重投影。
 - `--source hybrid` 同時需要兩者。優先採用實測深度，補洞圖會排除已有可靠實測值的像素，以及落在鄰近感測視角實測自由空間內的 3DGS 表面。
+- 若要修補少數小孔，可選 `--source sensor-priority-fill`。先用 `--scan`、`--merged-depths` 和 `--splat` 準備快取，再用原本的 voxel 尺寸及每塊格數執行 `build-mesh --source sensor-priority-fill --tile X Y Z`。這個模式只在距離量測點四個像素以內的空白處採用通過多視角檢查的 Gaussian 深度（以寬 512 為準，依深度圖寬度等比調整）。候選深度和最近量測點的差額須在 3 cm 加該點深度的 1% 以內。先和同一塊的 `--source sensor-priority` 結果比較，再決定是否烘焙全場。
 - `--cameras DIR` 可明確指定最終 COLMAP 模型。提供 `--trained` 時優先找 `cameras_refined/`，其次使用去畸變資料集的 `sparse/0`。需要公尺尺度的最終 PINHOLE 或 SIMPLE_PINHOLE 相機；含畸變的 `model/` 不適用。
 - 預設 voxel 邊長 2 cm、每塊邊長 64 格、深度圖寬度上限 320 像素、最大光軸深度 20 m、每批最多渲染 25 萬個 splat。依掃描可靠距離設定 `--max-depth`、依影像細節設定 `--width`、依可用顯存設定 `--batch-splats`。voxel 邊長減半，每塊在三個方向的實際長度也會減半。
 - `--exclude FILE` 每行填一個已註冊影像名稱。留出幀可保留感測深度供評估，其渲染深度與實測資料皆不參與融合或多視角檢查，照片也會排除於烘焙之外。

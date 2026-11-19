@@ -103,7 +103,13 @@ def write_ply(path, vertices, faces):
 
 def build(args, out):
     meta = json.loads((args.views / "views.json").read_text())
-    sources = ["lidar", "splat"] if args.source == "hybrid" else [args.source]
+    if args.source is None:
+        args.source = "splat" if "splat" in meta["sources"] else "lidar"
+        if "patch" in meta["sources"]:
+            args.source = "sensor-priority"
+    sources = {"hybrid": ["lidar", "splat"],
+               "sensor-priority": ["lidar", "patch"],
+               "sensor-priority-fill": ["lidar", "patch", "guard"]}.get(args.source, [args.source])
     if set(sources) - set(meta["sources"]):
         raise ValueError(f"Missing prepared depths for {args.source}")
     tiles = defaultdict(list)

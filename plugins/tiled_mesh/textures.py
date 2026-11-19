@@ -84,10 +84,13 @@ class Photos:
 
     def measured(self, index, uv):
         u, v = np.moveaxis(uv.astype(int), -1, 0)
-        primary = "lidar" if self.source == "hybrid" else self.source
+        secondary = {"hybrid": "splat", "sensor-priority": "patch", "sensor-priority-fill": "patch"}.get(self.source)
+        primary = "lidar" if secondary else self.source
         measured = self.depth(index, primary)[v, u]
-        if self.source == "hybrid":
-            measured = np.where(measured > 0, measured, self.depth(index, "splat")[v, u])
+        if secondary:
+            measured = np.where(measured > 0, measured, self.depth(index, secondary)[v, u])
+        if self.source == "sensor-priority-fill":
+            measured = np.where(measured > 0, measured, self.depth(index, "guard")[v, u])
         return measured
 
     def corners_visible(self, tri, index, voxel):

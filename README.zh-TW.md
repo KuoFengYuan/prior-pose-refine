@@ -186,7 +186,7 @@ OUT_DIR/
 
 ### 選用的 mesh 匯出
 
-訓練後可在 LichtFeld 的 **Mesh Export** 分頁或命令列使用 LiDAR、3DGS 渲染深度或兩者融合，匯出可獨立載入的公尺座標三角網格。可先用 2 cm voxel，把去畸變照片烘焙到各塊 GLB 保留紋理細節。調整貼圖解析度時可沿用深度快取與幾何。[安裝、選項與單塊重建](docs/mesh.zh-TW.md)。
+訓練後可在 LichtFeld 的 **Mesh Export** 分頁或命令列使用 LiDAR、3DGS 渲染深度或兩者融合，匯出可獨立載入的公尺座標三角網格。若掃描已有對位過的深度圖，指定 `--scan` 和 `--merged-depths` 即可以 CPU 補上原始量測的缺洞。可先用 2 cm voxel，把去畸變照片烘焙到各塊 GLB 保留紋理細節。調整貼圖解析度時可沿用深度快取與幾何。[安裝、選項與單塊重建](docs/mesh.zh-TW.md)。
 
 ## 7. 選項
 
@@ -221,7 +221,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 
 ## 8. 怎麼判斷結果好不好
 
-檢查匯出的 mesh 時，請一起看留出影格的光軸深度誤差，以及 mesh 命中高信心深度像素的比例。烘焙後可從 `textures.json` 查看照片覆蓋的 mesh 面積比例，`timings.json` 則列出各階段耗時。[Mesh 實測](docs/benchmark.zh-TW.md#mesh-匯出)。
+檢查匯出的 mesh 時，請一起看留出影格的光軸深度誤差，以及 mesh 命中高信心深度像素的比例。選用感測深度優先模式時，確認 `mesh.json` 記錄 `sensor-priority`。烘焙後可從 `textures.json` 查看照片覆蓋的 mesh 面積比例，`timings.json` 則列出各階段耗時。[Mesh 實測](docs/benchmark.zh-TW.md#mesh-匯出)。
 
 看 `OUT_DIR/report.txt`。以下是一份 390 張影像的掃描於 2026-11-18 重跑的報告，可以當作「正常」的參考值:
 
@@ -291,6 +291,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | GPU 記憶體不足 | 減少 `--gpu-workers`,例如改成 1 |
 | 磁碟空間不足 | 把 `OUT_DIR` 放在空間足夠的磁碟；確認結果後刪除 `work/` |
 | 貼圖出現灰色區域 | 查看 `textures.json` 的照片覆蓋面積，確認選取的照片與最終相機相符。 |
+| 合併深度無法配對 | 確認影像相對名稱、以毫米表示的光軸深度、16 位元 PNG 格式及去畸變影像的像素對位。 |
 | Mesh 匯出顯示 `No observed surface` | 檢查最終相機座標、深度範圍、可見表面的影格數，以及指定的區塊索引。[Mesh 匯出說明](docs/mesh.zh-TW.md)。 |
 
 ## 11. 運作方式
@@ -306,7 +307,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | `requirements.txt` | Python 套件需求 |
 | `tests/test_prior_pose_refine.py` | 輸入保護、數值範圍、各輪 BA 上限、幾何、配對選擇及 COLMAP 姿態一致性的回歸測試 |
 | `.github/workflows/checks.yml` | Python 3.11、3.12、3.13 的 GitHub Actions 檢查，包含 pycolmap 往返測試 |
-| `plugins/tiled_mesh/` | 選用的 LichtFeld mesh 匯出面板、背景程式及獨立依賴套件 |
+| `plugins/tiled_mesh/` | 選用的 LichtFeld mesh 匯出面板、深度準備、融合及照片烘焙程式與獨立依賴套件 |
 | `local.env.example` | 本機路徑設定的範本，複製成 `local.env`(不納入版控)後填入 |
 | `docs/method.zh-TW.md` | 流程怎麼運作、為什麼這樣設計 |
 | `docs/benchmark.zh-TW.md` | 完整實驗數據和對照圖 |

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/tiled_mesh
 from export_mesh import main
 from fusion import surface
 from textures import Photos, choose_views
-from views import filter_splats, lidar_depth
+from views import bounded_fill, filter_splats, lidar_depth, merged_depth
 
 
 class MeshTest(unittest.TestCase):
@@ -159,10 +159,58 @@ class MeshTest(unittest.TestCase):
         view, = json.loads((out / "views.json").read_text())["views"]
         self.assertEqual(view["w2c"][0][3], 0.25)
         np.testing.assert_array_equal(np.load(out / "lidar-0.npy"), np.full((4, 4), 3))
+        merged = self.root / "merged"
+        merged.mkdir()
+        Image.fromarray(np.full((4, 4), 2500, np.uint16)).save(merged / "measured.png")
+        confidence = np.full((4, 4), 2, dtype="u1")
+        confidence[:, 2:] = 1
+        confidence.tofile(depth / "confidence.bin")
+        priority = self.root / "priority"
+        main([*cmd, str(priority), "--merged-depths", str(merged)])
+        raw = np.load(priority / "lidar-0.npy")
+        patch = np.load(priority / "patch-0.npy")
+        np.testing.assert_array_equal(raw[:, :2], 3.0)
+        np.testing.assert_array_equal(raw[:, 2:], 0)
+        np.testing.assert_array_equal(patch[:, :2], 0)
+        np.testing.assert_allclose(patch[:, 2:], 2.5)
+        measured = Photos(priority, self.root, "sensor-priority").measured(0, np.array([[0, 0], [3, 0]]))
+        np.testing.assert_allclose(measured, [3, 2.5])
         model.rename(trained / "unavailable")
         with self.assertRaisesRegex(ValueError, "final world-aligned"):
             main([*cmd, str(self.root / "missing")])
         self.assertFalse((self.root / "missing").exists())
+
+    def test_native_merged_depth_grid_and_format(self):
+        view = dict(name="frame.jpg", rgb_size=[7, 10], size=[4, 5], K=[[3, 0, 2], [0, 4, 2], [0, 0, 1]])
+        data = np.array([[1000, 0, 5000, 6000, 3000]] * 3, np.uint16)
+        path = self.root / "frame.png"
+        Image.fromarray(data).save(path)
+        merged = merged_depth(self.root, view, 5)
+        self.assertEqual(view["size"], [3, 5])
+        np.testing.assert_allclose(view["K"][1], [0, 3, 1.5])
+        np.testing.assert_allclose(merged, [[1, 0, 5, 0, 3]] * 3)
+        Image.fromarray(data.astype("u1")).save(path)
+        with self.assertRaisesRegex(ValueError, "16-bit"):
+            merged_depth(self.root, view, 5)
+
+    def test_sensor_priority_fuses_patch_only_without_raw_support(self):
+        metadata = json.loads((self.views / "views.json").read_text())
+        metadata["sources"].append("patch")
+        (self.views / "views.json").write_text(json.dumps(metadata))
+        for i in range(4):
+            depth = np.load(self.views / f"lidar-{i}.npy")
+            depth[:, 8:] = 0
+            np.save(self.views / f"lidar-{i}.npy", depth)
+            np.save(self.views / f"patch-{i}.npy", np.where(depth == 0, .66, 0).astype("f4"))
+        dest = self.root / "built"
+        main(["build-mesh", "--views", str(self.views), "--voxel", ".025", "--output", str(dest)])
+        manifest = json.loads((dest / "mesh.json").read_text())
+        self.assertEqual(manifest["source"], "sensor-priority")
+        vertices = np.concatenate([PlyData.read(dest / tile["file"])["vertex"].data for tile in manifest["tiles"]])
+        near, filled = vertices["z"][vertices["x"] < -.1], vertices["z"][vertices["x"] > .1]
+        self.assertTrue(len(near) and len(filled))
+        np.testing.assert_allclose(near, .63, atol=1e-5)
+        np.testing.assert_allclose(filled, .66, atol=1e-5)
 
     def test_splat_support_and_lidar_free_space(self):
         for i in range(3):
@@ -170,12 +218,25 @@ class MeshTest(unittest.TestCase):
             if i == 0:
                 z[8, 8] = 8
             np.save(self.views / f"raw-{i}.npy", z)
-        filter_splats(self.frames, self.views, True)
+            np.save(self.views / f"patch-{i}.npy", np.zeros_like(z))
+        filter_splats(self.frames, self.views, True, True)
         depth = np.load(self.views / "splat-0.npy")
         self.assertEqual(depth[8, 8], 0)
         self.assertEqual(depth[8, 7], 0.5)
         self.assertFalse(np.load(self.views / "fill-0.npy").any())
+        self.assertFalse(np.load(self.views / "guard-0.npy").any())
         self.assertFalse((self.views / "splat-3.npy").exists())
+
+    def test_bounded_fill_respects_metric_edges_and_unknown_space(self):
+        measured = np.zeros((5, 512), np.float32)
+        splat = np.full_like(measured, 2.04)
+        self.assertFalse(bounded_fill(splat, measured).any())
+        measured[:, 10] = 2
+        splat[:, 8] = 2.1
+        guarded = bounded_fill(splat, measured)
+        self.assertTrue((guarded[:, 6] == splat[:, 6]).all())
+        for col in (5, 8, 10, 15):
+            self.assertFalse(guarded[:, col].any())
 
 
 if __name__ == "__main__":

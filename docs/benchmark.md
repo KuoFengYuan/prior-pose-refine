@@ -394,3 +394,16 @@ On a separate 1,505-view real scan, 2 cm fusion produced 121 tiles with 64 cells
 A saved 5M-Gaussian project with 743 registered photographs was exported at 1.5 cm (512-pixel depth, 128 cells/tile). Its 176 tiles contain 14,529,568 triangles and span 35.1 × 22.7 × 3.7 m. Native-resolution photo baking covered 53.0% of surface area from the front and 77.2% with the optional second side. The remaining surface is neutral gray. Reopening the combined GLB verified all triangles, UVs and 211 embedded PNGs. The five checked capture views were also inputs to the bake.
 
 On an RTX 5070, converting the existing checkpoint took 1.4 s, depth preparation 55.9 s, and fusion 56.6 s. CPU baking took 130 s with front faces and 132 s with both sides. The final one-pass stage sum including packaging is 246 s. One-second GPU samples ranged from 1–90% during the first export and 1–8% during the cached rebake. This run used a resident Gaussian model; lower VRAM can require smaller rendering batches. It reused trained weights and used every registered photograph. No held-out image quality or independent geometry accuracy was measured on this scan.
+
+### Sensor-priority depth on a 743-view indoor scan
+
+We compared the existing sensor + 3DGS mesh with sensor-priority fusion on one saved project. Both used 1.5 cm voxels, 128 cells per tile edge, a 512-pixel depth width and two-sided baking from the native photographs. The merged depth maps registered iPhone and Mid-360 measurements to the undistorted cameras.
+
+| Whole-scene export | Triangles | Triangles beyond 8 m | Area with photo texture | Combined GLB | Processing time |
+|---|---:|---:|---:|---:|---:|
+| Raw sensor + 3DGS fill | 14,529,568 | 8,530,510 | 77.2% | 904 MB | 4 min 06 s |
+| Raw sensor + merged depth | 3,665,422 | 510,243 | 77.9% | 289 MB | 1 min 48 s |
+
+The 8 m distance is measured horizontally from each triangle centroid to the rectangle enclosing the camera centers. Distant triangles decreased by 94%. Renderings at identical cameras showed fewer radiating outer surfaces and visible gaps at desk edges. The entire raw and merged export ran on the CPU. Preparation took 4.5 s, fusion 44.5 s and baking 58.6 s. GPU utilization sampled once per second was 1–6% during fusion and baking. The baseline used the GPU to prepare splat depths and reached 90% utilization. Times include combining the textured tiles and exclude training.
+
+For resolution selection we withheld every eighth registered view (93 total) from fusion and tested three tiles against their raw depths at the same reference pixels. At widths 512 and 941, the desk's median absolute depth errors were 0.89 and 0.88 cm and its edge P90 errors were 5.47 and 5.41 cm. The partition edge P90 was 3.56 and 3.60 cm and the aisle edge P90 was 8.55 and 8.43 cm. Three-tile indexing and integration took 14.5 and 36.7 s. Edges were defined by a depth range over 8 cm across a 7 × 7 pixel neighborhood of valid measurements. These comparisons measure agreement with the same sensor. The full export used all 743 views. The five capture-view color checks showed mixed changes, and the scan has no independent surface reference.
