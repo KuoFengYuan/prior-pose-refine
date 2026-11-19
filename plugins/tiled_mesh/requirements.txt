@@ -1,0 +1,8 @@
+numpy
+scipy
+numba
+scikit-image
+plyfile
+pycolmap>=4
+Pillow
+trimesh>=4

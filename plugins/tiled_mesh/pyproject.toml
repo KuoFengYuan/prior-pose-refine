@@ -1,0 +1,10 @@
+[project]
+name = "tiled_mesh"
+version = "0.1.0"
+description = "Export tiled metric meshes with baked photo textures from trained splats and RGB-aligned depth"
+
+[tool.lichtfeld]
+hot_reload = false
+plugin_api = ">=1,<2"
+lichtfeld_version = ">=0.5.5"
+required_features = []

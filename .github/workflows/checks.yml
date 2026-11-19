@@ -36,3 +36,18 @@ jobs:
         run: bash -n prior-pose-refine
       - name: Run regression tests and COLMAP round-trip
         run: python -I -B tests/test_prior_pose_refine.py -v
+
+  mesh:
+    name: Tiled mesh geometry
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -r plugins/tiled_mesh/requirements.txt
+      - run: python -I -B tests/test_tiled_mesh.py -v

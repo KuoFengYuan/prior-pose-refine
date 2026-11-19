@@ -373,3 +373,24 @@ Unseen viewpoints: out of every 128 images, 16 consecutive images are held out f
 - Extra floaters with the same color as the wall appear in front of the wall. They are not visible from the captured viewpoints, so PSNR does not catch them. Removing them requires a LiDAR depth constraint during training.
 - The −0.5 dB on the first scan is concentrated in two segments that look at the distant ceiling of the large office (about −1 dB each). There, the ceiling has holes with no Gaussians. The other 4 segments are +0.1 to +0.6 dB. LiDAR misalignment has been ruled out (0.1–0.3 cm offset from SfM points). LiDAR points not visible in the photos have also been ruled out: 29% of the Mid-360 points are seen by fewer than 5 photos (only 0.1% for the iPhone LiDAR of the second scan), but adding only the points seen by 3 or more photos (keeping 75%) still gives a PSNR of 23.61.
 - Holding out one continuous 12.5% section of the capture path was tried first and not adopted. That section is a partitioned room walked through only once, so both initial point clouds reach only 14–15 dB. Also, the LiDAR points themselves carry the depth from that section's images. In addition, for images it was not trained on, LichtFeld interpolates the exposure from the neighboring training images in name order, so renaming and reordering the images would make the exposure wrong.
+
+## Mesh export
+
+The 390-view metric scan reused a 1M-Gaussian, 30,000-step LichtFeld model. Its 49 LichtFeld test views were reserved for evaluation. The other 341 cameras participated in fusion and multi-view checking. We raycast each mesh at the held-out poses and measured coverage on 2,920,948 high-confidence LiDAR reference pixels. Median and P90 absolute camera-z errors use the pixels hit by the mesh. The reference and input depths come from the same sensor. This experiment measures geometric agreement.
+
+| Voxel | Source | Coverage | Median error | P90 error | Triangles |
+|---|---|---:|---:|---:|---:|
+| 4 cm | LiDAR | 98.39% | 0.89 cm | 2.57 cm | 75,572 |
+| 4 cm | 3DGS | 99.31% | 5.82 cm | 10.90 cm | 99,374 |
+| 4 cm | LiDAR + 3DGS | 99.52% | 0.89 cm | 2.65 cm | 91,523 |
+| 2 cm | LiDAR | 99.18% | 0.87 cm | 2.44 cm | 313,327 |
+| 2 cm | 3DGS | 99.47% | 5.76 cm | 10.75 cm | 445,642 |
+| 2 cm | LiDAR + 3DGS | 99.70% | 0.87 cm | 2.51 cm | 383,542 |
+
+At 2 cm, the hybrid gained 0.52 percentage points of coverage over LiDAR alone, with less than 0.01 cm difference in median error. Splat-only depth had a 5.76 cm median error. On this capture the hybrid is a useful choice for filling gaps where sensor measurements are available nearby.
+
+On a separate 1,505-view real scan, 2 cm fusion produced 121 tiles with 64 cells per edge and 484 tiles with 32 cells per edge. Both meshes had 748,684 triangles. The maximum nearest-neighbor distance between triangle centroids across the two partitions was below 0.000001 m. A 960-view simulated warehouse with simulator depth covered about 54 × 32 × 9 m and produced 1,288 tiles and 12,463,197 triangles at 4 cm. The warehouse checks fusion and partitioning. Long-range geometry in a real warehouse still needs independent validation. [Reproduction guide](mesh.md)
+
+A saved 5M-Gaussian project with 743 registered photographs was exported at 1.5 cm (512-pixel depth, 128 cells/tile). Its 176 tiles contain 14,529,568 triangles and span 35.1 × 22.7 × 3.7 m. Native-resolution photo baking covered 53.0% of surface area from the front and 77.2% with the optional second side. The remaining surface is neutral gray. Reopening the combined GLB verified all triangles, UVs and 211 embedded PNGs. The five checked capture views were also inputs to the bake.
+
+On an RTX 5070, converting the existing checkpoint took 1.4 s, depth preparation 55.9 s, and fusion 56.6 s. CPU baking took 130 s with front faces and 132 s with both sides. The final one-pass stage sum including packaging is 246 s. One-second GPU samples ranged from 1–90% during the first export and 1–8% during the cached rebake. This run used a resident Gaussian model; lower VRAM can require smaller rendering batches. It reused trained weights and used every registered photograph. No held-out image quality or independent geometry accuracy was measured on this scan.
