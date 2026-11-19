@@ -2,7 +2,7 @@
 
 **English** | [繁體中文](AGENTS.zh-TW.md)
 
-`prior-pose-refine` refines approximate camera poses, focal length and lens distortion with COLMAP, starting from a prior model (poses, intrinsics and 3D points from ARKit or any other source), and writes a 3DGS training dataset. The pipeline is the `prior-pose-refine` script plus the helper module `prior_pose_refine.py`. Usage is in [README.md](README.md), the method in [docs/method.md](docs/method.md), the measurements in [docs/benchmark.md](docs/benchmark.md).
+`prior-pose-refine` refines approximate camera poses, focal length and lens distortion with COLMAP, starting from a prior model (poses, intrinsics and 3D points from ARKit or any other source), and writes a 3DGS training dataset. The pipeline is the `prior-pose-refine` script with helpers in `prior_pose_refine.py` and `lidar_depth.py`. Usage is in [README.md](README.md), the method in [docs/method.md](docs/method.md), the measurements in [docs/benchmark.md](docs/benchmark.md).
 
 ## Delivery workflow
 

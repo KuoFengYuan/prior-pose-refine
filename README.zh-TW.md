@@ -91,6 +91,8 @@ SCAN_DIR/
 
 這份文件和報告把這個模型裡的姿態、內參和點雲稱為「先驗」(prior)。
 
+支援的 Splatify-Anything 掃描可另外提供 `depth/` 內的 iPhone 深度與信心值、`poses.jsonl`，以及 `mid360/calibration.json` 和 `mid360/continuous/` 的連續錄製檔。管線會在相機優化完成後自動匯出訓練用深度與表面法線；只有單一感測器也可使用。
+
 ### 3.1 姿態和點雲可以從哪裡來
 
 | 來源 | 狀態 |
@@ -130,6 +132,7 @@ align                 0.4 s
 restore_prior_poses   0.1 s
 undistort             3.0 s
 merge_points          0.4 s
+export_depth          …
 == prior-pose-refine report
 …
 dataset ready: …/scan_opt/dataset
@@ -138,7 +141,7 @@ dataset ready: …/scan_opt/dataset
 - 在 RTX 5070 上完整重跑 390 張掃描，預設設定耗時 97.8 秒，指定 `--ba-iterations 15` 耗時 102.5 秒（各跑一次）。
 - 輸出資料夾已經存在時會停下來，不會覆蓋，要覆蓋請加 `--force`。
 - 寫入前會檢查選項數值並解析符號連結。`OUT_DIR` 必須和 `SCAN_DIR`、影像資料夾、先驗模型分開；同一路徑、上層與下層路徑都會被拒絕，加 `--force` 也一樣。輸出資料夾包含主程式所在目錄時也會被拒絕。
-- 每次輸出 1.2 到 2 GB,執行前先確認磁碟空間。
+- 每次輸出 1.2 到 2 GB,執行前先確認磁碟空間。 743 張影像的雙 LiDAR 範例另用了約 703 MiB 儲存深度與法線。
 
 ## 5. 輸出
 
@@ -146,6 +149,8 @@ dataset ready: …/scan_opt/dataset
 OUT_DIR/
 ├── dataset/                 ← 訓練用這個
 │   ├── images/              去畸變後的影像(PINHOLE)
+│   ├── depth/               感測深度 PNG，與去畸變照片同名，單位為毫米
+│   ├── normals/             與深度圖同名的 RGB 相機座標法線圖
 │   └── sparse/0/            cameras.bin、images.bin、points3D.bin(SfM 點 + 先驗點雲)
 ├── model/                   去畸變前、已對齊先驗模型座標的模型(含畸變參數)
 ├── report.txt               結果摘要，見第 8 節
@@ -170,6 +175,13 @@ OUT_DIR/
 
 ```bash
 "$LICHTFELD" -d OUT_DIR/dataset --max-cap 1000000
+```
+
+要在 LichtFeld 訓練時讀取兩組圖，請啟用深度與法線監督。非零深度代表沿相機光軸的距離；RGB 法線採用 OpenCV 相機座標，朝向相機，鄰域量測不足處為中灰色。
+
+```bash
+"$LICHTFELD" -d OUT_DIR/dataset --max-cap 1000000 --use-depth-loss --depth-loss-mode ssi-depth --no-depth-auto-generate \
+  --use-normal-loss --normal-loss-space camera-opencv --no-normal-auto-generate
 ```
 
 - `--max-cap 1000000` 把高斯數上限設為 100 萬，上面所有結果都是用這個設定；可以依顯示卡記憶體調整(LichtFeld 預設是 500 萬)。
@@ -202,6 +214,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 | `--rounds N` | `3` | 三角化加 BA 的輪數(只用於 fast)。2 輪快約 60 秒，但少約 0.2 dB;第 4 輪沒有幫助 |
 | `--camera-model M` | fast:`RAD_TAN_THIN_PRISM_FISHEYE`<br>global:`OPENCV` | BA 和去畸變用的相機模型。`OPENCV_FISHEYE` 參數比較少、比較保守(少約 0.08 dB);`OPENCV` 少約 2.4 dB。`--mode global` 只支援 `OPENCV` |
 | `--ba-iterations N` | 預設相機跑三輪時為 `15/15/10`，其餘為 `15` | fast 模式下，明確指定整數會讓每輪都用相同上限。加 `--ba-iterations 15` 可重現原本的設定。 |
+| `--no-depth` | 預設自動匯出 | 略過深度與法線匯出。另選輸入照片目錄時也會略過，因為原始深度只與擷取照片對位。 |
 | `--init-points sfm\|merge` | `merge`(先驗模型沒有 `points3D.bin` 時為 `sfm`) | 訓練資料集的初始點雲。`merge` = SfM 點加上先驗模型的點；`sfm` = 只用 SfM 點。見第 6 節 |
 | `--matcher covis\|sequential` | `covis` | `covis`:用先驗姿態和點雲共視挑選匹配對。`sequential`:COLMAP 依拍攝順序匹配，沒有點雲時使用 |
 | `--top-k N` | `25` | 每張影像配對的共視影像數 |
@@ -241,6 +254,8 @@ frames more than 10 cm from their prior pose after the similarity: 0
 
 這次在 RTX 5070 上重跑花了 97.8 秒，從 GPU 閒置時開始並記錄使用率。這些是參考值，不要求逐字一致：GPU 非確定性可能讓點數相差數百點、重投影誤差相差約 0.001 px。輸入檢查不代表畫質驗證；PSNR 是否改善仍須透過 3DGS 評估。
 
+11 月 19 日的雙 LiDAR 掃描匯出了 743/743 張深度圖，兩個感測器在每張都有貢獻，有效像素比例中位數為深度 88.4%、法線 84.2%；390 張的單 iPhone 掃描為 390/390 組，深度 92.5%、法線 90.1%。`work/logs/export_depth.log` 列出逐幀來源像素數、有效法線數與兩個來源重疊處的深度相對誤差中位數。 [融合與訓練實測](docs/benchmark.zh-TW.md#雙-lidar-訓練深度與法線)。
+
 | 項目 | 正常 | 有問題時 |
 |---|---|---|
 | Registered images | 等於先驗模型的影像數 | 少很多：有些影像沒有足夠的匹配，檢查 `work/logs/matching.log` |
@@ -273,6 +288,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 
 | 訊息或狀況 | 處理方式 |
 |---|---|
+| 找不到訓練深度或 MID-360 沒有補點 | 先看 `report.txt` 的深度統計，再核對影像名稱、深度與信心檔、連續串流及同一組外參校正；可只重跑下方的匯出指令。 |
 | `lacks numpy/scipy` | 在 `local.env` 設定 `PYTHON`,或加 `--python PATH`,或 `pip install -r requirements.txt` |
 | `colmap is not on PATH` | 在 `local.env` 把 COLMAP 所在目錄加進 `PATH`,再 `source local.env` |
 | `OUT_DIR exists` | 換一個輸出資料夾，或加 `--force` |
@@ -294,6 +310,12 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | 合併深度無法配對 | 確認影像相對名稱、以毫米表示的光軸深度、16 位元 PNG 格式及去畸變影像的像素對位。 |
 | Mesh 匯出顯示 `No observed surface` | 檢查最終相機座標、深度範圍、可見表面的影格數，以及指定的區塊索引。[Mesh 匯出說明](docs/mesh.zh-TW.md)。 |
 
+已有優化結果時，可單獨補匯出這兩組圖。內容相同的 PNG 可沿用；已存在且內容不同的圖會受到保護。
+
+```bash
+"$PYTHON" -I prior_pose_refine.py export-depth --scan SCAN_DIR --model OUT_DIR/model --dataset OUT_DIR/dataset
+```
+
 ## 11. 運作方式
 
 簡單來說:SIFT 特徵 → 用先驗姿態和點雲共視挑選匹配對 → 從先驗姿態出發，用 RAD_TAN_THIN_PRISM_FISHEYE 相機做 3 輪三角化和 bundle adjustment → 對齊回先驗模型的公尺座標系 → 去畸變。每個步驟和背後的理由見 [docs/method.zh-TW.md](docs/method.zh-TW.md)。
@@ -304,6 +326,8 @@ frames more than 10 cm from their prior pose after the similarity: 0
 |---|---|
 | `prior-pose-refine` | 主程式，串起整個流程 |
 | `prior_pose_refine.py` | 輔助子指令：讀取先驗模型、挑選匹配對、建立初始模型、寫入先驗、把觀測太少的影像還原成先驗姿態、檢查對齊、合併初始點雲。每個都可以單獨執行，用 `--help` 查看說明 |
+| `lidar_depth.py` | 感測時間對齊、原始 Mid-360 回波動態補償、iPhone 深度對位、訓練深度融合與法線估計 |
+| `tests/test_lidar_depth.py` | 深度來源、移動相機、遮擋、鏡頭投影、平面法線與 PNG 格式回歸測試 |
 | `requirements.txt` | Python 套件需求 |
 | `tests/test_prior_pose_refine.py` | 輸入保護、數值範圍、各輪 BA 上限、幾何、配對選擇及 COLMAP 姿態一致性的回歸測試 |
 | `.github/workflows/checks.yml` | Python 3.11、3.12、3.13 的 GitHub Actions 檢查，包含 pycolmap 往返測試 |

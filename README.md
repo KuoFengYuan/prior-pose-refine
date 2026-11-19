@@ -91,6 +91,8 @@ Requirements:
 
 In this documentation and in the report, the poses, intrinsics and points of this model are called the *prior*.
 
+Splatify-Anything scans can also supply iPhone depth and confidence files in `depth/`, `poses.jsonl`, and a calibrated recording in `mid360/calibration.json` and `mid360/continuous/`. The pipeline exports training depth and surface normals after camera refinement and supports either sensor on its own.
+
 ### 3.1 Where the poses and points can come from
 
 | Source | Status |
@@ -130,6 +132,7 @@ align                 0.4 s
 restore_prior_poses   0.1 s
 undistort             3.0 s
 merge_points          0.4 s
+export_depth          …
 == prior-pose-refine report
 …
 dataset ready: …/scan_opt/dataset
@@ -138,7 +141,7 @@ dataset ready: …/scan_opt/dataset
 - On an RTX 5070, the 390-image scan took 97.8 s with the default caps and 102.5 s with `--ba-iterations 15` (one full run each).
 - If the output folder already exists, `prior-pose-refine` stops instead of overwriting it; add `--force` to overwrite.
 - Before writing output, the tool validates option values and resolves symbolic links. `OUT_DIR` must be separate from `SCAN_DIR`, the image folder and the prior model: equal, parent and child paths are rejected, including with `--force`. An output folder containing the pipeline itself is also rejected.
-- Each run writes 1.2 to 2 GB, so check the free disk space first.
+- Each run writes 1.2 to 2 GB, so check the free disk space first. The 743-image dual-LiDAR example used another 703 MiB for depth and normals.
 
 ## 5. Output
 
@@ -146,6 +149,8 @@ dataset ready: …/scan_opt/dataset
 OUT_DIR/
 ├── dataset/                 ← train on this
 │   ├── images/              undistorted images (PINHOLE)
+│   ├── depth/               sensor depth PNGs named after the undistorted photos, in millimeters
+│   ├── normals/             corresponding RGB camera-space normal PNGs
 │   └── sparse/0/            cameras.bin, images.bin, points3D.bin (SfM points + prior points)
 ├── model/                   the refined model before undistortion, aligned to the prior model (with distortion parameters)
 ├── report.txt               summary of the result, see section 8
@@ -170,6 +175,13 @@ OUT_DIR/
 
 ```bash
 "$LICHTFELD" -d OUT_DIR/dataset --max-cap 1000000
+```
+
+To train with both maps, enable depth and normal supervision in LichtFeld. Nonzero depth measures distance along the camera axis. RGB normals face the camera in OpenCV axes, with neutral gray for unsupported neighborhoods.
+
+```bash
+"$LICHTFELD" -d OUT_DIR/dataset --max-cap 1000000 --use-depth-loss --depth-loss-mode ssi-depth --no-depth-auto-generate \
+  --use-normal-loss --normal-loss-space camera-opencv --no-normal-auto-generate
 ```
 
 - `--max-cap 1000000` caps the number of Gaussians at 1M, the setting used for all results above; adjust it to your GPU memory (LichtFeld's default is 5M).
@@ -202,6 +214,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 | `--rounds N` | `3` | triangulation + bundle-adjustment rounds (fast mode only). 2 rounds are about 60 s faster but lose about 0.2 dB; a 4th round does not help |
 | `--camera-model M` | fast: `RAD_TAN_THIN_PRISM_FISHEYE`<br>global: `OPENCV` | camera model for bundle adjustment and undistortion. `OPENCV_FISHEYE` has fewer parameters and is more conservative (about 0.08 dB lower); `OPENCV` is about 2.4 dB lower. `--mode global` supports only `OPENCV` |
 | `--ba-iterations N` | `15/15/10` for three rounds with the default camera, otherwise `15` | In fast mode, an explicit integer sets the same cap for every round. Use `--ba-iterations 15` to reproduce the previous schedule. |
+| `--no-depth` | automatic export | Skip both depth and normal export. Selecting an alternate image directory also skips it because depth is registered to the captured photos. |
 | `--init-points sfm\|merge` | `merge` (`sfm` when the prior model has no `points3D.bin`) | initial point cloud of the dataset. `merge` = SfM points plus the points of the prior model; `sfm` = SfM points only. See section 6 |
 | `--matcher covis\|sequential` | `covis` | `covis`: choose matching pairs from the prior poses and point covisibility. `sequential`: COLMAP matching in capture order, for scans without points |
 | `--top-k N` | `25` | covisible partners per image |
@@ -241,6 +254,8 @@ frames more than 10 cm from their prior pose after the similarity: 0
 
 The rerun took 97.8 s on an RTX 5070, with GPU utilization recorded from an idle start. These are reference values, not exact regression targets: GPU nondeterminism can change the point count by a few hundred and reprojection error by about 0.001 px. Input checks do not establish image quality; improvements in PSNR still require 3DGS evaluation.
 
+The November 19 dual-LiDAR export produced 743/743 maps with both sensors contributing to every frame and median valid coverage of 88.4% for depth and 84.2% for normals. The iPhone-only scan produced 390/390 maps at 92.5% depth and 90.1% normal coverage. `work/logs/export_depth.log` lists per-frame source counts and normal coverage, plus the median relative depth difference on overlapping returns. [Fusion and training measurements](docs/benchmark.md#dual-lidar-training-depth-and-normals).
+
 | Field | Normal | When it is not |
 |---|---|---|
 | Registered images | equals the number of prior images | far fewer: some images lack matches; check `work/logs/matching.log` |
@@ -273,6 +288,7 @@ The default `fast` mode assumes the prior poses are roughly right and only need 
 
 | Message or symptom | What to do |
 |---|---|
+| Missing training depth or no Mid-360 contribution | Inspect the depth counts in `report.txt`, then check capture names, paired depth/confidence files, continuous recording and matching extrinsics. Use the command below to export an existing dataset. |
 | `lacks numpy/scipy` | set `PYTHON` in `local.env`, pass `--python PATH`, or `pip install -r requirements.txt` |
 | `colmap is not on PATH` | add the COLMAP directory to `PATH` in `local.env`, then `source local.env` |
 | `OUT_DIR exists` | choose another output folder, or add `--force` |
@@ -294,6 +310,12 @@ The default `fast` mode assumes the prior poses are roughly right and only need 
 | Merged depths do not match | Check the relative image names, camera-axis depths in millimeters, 16-bit PNG format and undistorted image grid. |
 | Mesh worker reports `No observed surface` | Check final camera coordinates, depth range, the number of views seeing the surface, and the selected tile key. See the [mesh guide](docs/mesh.md). |
 
+To add both sets of maps to an existing refinement, run the exporter by itself. It can reuse an identical PNG layer and declines to replace conflicting maps.
+
+```bash
+"$PYTHON" -I prior_pose_refine.py export-depth --scan SCAN_DIR --model OUT_DIR/model --dataset OUT_DIR/dataset
+```
+
 ## 11. How it works
 
 In short: SIFT features → matching pairs chosen from the prior poses and point covisibility → three rounds of triangulation and bundle adjustment with a RAD_TAN_THIN_PRISM_FISHEYE camera, starting from the prior poses → alignment to the prior model's metric frame → undistortion. Each step and the reasons behind it are in [docs/method.md](docs/method.md).
@@ -304,6 +326,8 @@ In short: SIFT features → matching pairs chosen from the prior poses and point
 |---|---|
 | `prior-pose-refine` | the pipeline |
 | `prior_pose_refine.py` | helper subcommands: read the prior model, choose matching pairs, build the initial model, write priors, restore the prior pose of images with too few observations, check the alignment, merge the initial point cloud. Each runs on its own; see `--help` |
+| `lidar_depth.py` | Sensor clock alignment, Mid-360 motion compensation, iPhone depth registration, training depth fusion and normal estimation |
+| `tests/test_lidar_depth.py` | Sensor, motion compensation, occlusion, camera projection, plane normal and PNG regression tests |
 | `requirements.txt` | Python packages |
 | `tests/test_prior_pose_refine.py` | regression tests for input protection, numeric ranges, per-round BA caps, geometry, pair selection and COLMAP pose consistency |
 | `.github/workflows/checks.yml` | GitHub Actions checks on Python 3.11, 3.12 and 3.13, including the pycolmap round-trip |

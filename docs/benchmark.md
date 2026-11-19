@@ -374,6 +374,30 @@ Unseen viewpoints: out of every 128 images, 16 consecutive images are held out f
 - The −0.5 dB on the first scan is concentrated in two segments that look at the distant ceiling of the large office (about −1 dB each). There, the ceiling has holes with no Gaussians. The other 4 segments are +0.1 to +0.6 dB. LiDAR misalignment has been ruled out (0.1–0.3 cm offset from SfM points). LiDAR points not visible in the photos have also been ruled out: 29% of the Mid-360 points are seen by fewer than 5 photos (only 0.1% for the iPhone LiDAR of the second scan), but adding only the points seen by 3 or more photos (keeping 75%) still gives a PSNR of 23.61.
 - Holding out one continuous 12.5% section of the capture path was tried first and not adopted. That section is a partitioned room walked through only once, so both initial point clouds reach only 14–15 dB. Also, the LiDAR points themselves carry the depth from that section's images. In addition, for images it was not trained on, LichtFeld interpolates the exposure from the neighboring training images in name order, so renaming and reordering the images would make the exposure wrong.
 
+## Dual-LiDAR training depth and normals
+
+On the existing refined F03A9B dataset, all 743 training photographs have registered 512×383 depth and normal maps. With the iPhone alone, median per-image valid coverage was 85.2% for depth and 82.5% for normals. Adding Mid-360 increased coverage to **88.4% depth** and **84.2% normals**, with additional Mid-360 depths in all 743 views. Overlapping sensor readings were used to check registration. Depth and normal validity were counted separately.
+
+To choose the hole-filling radius, take every 12th image across the scan (62 views), mask about one seventh of the iPhone measurements in 16×16 pixel patches and estimate their depths from Mid-360. The table gives medians across views. Errors use the masked phone pixels for which a prediction exists. The variants were tuned and compared on the same views.
+
+| Mid-360 time window and fill radius | Masked pixels recovered | Median absolute error | 90th percentile error |
+|---|---:|---:|---:|
+| ±0.25 s, direct returns | 3.4% | 1.91 cm | 7.32 cm |
+| ±0.25 s, 4 pixels | 26.8% | 1.60 cm | 5.18 cm |
+| **±0.5 s, 4 pixels (default)** | **34.3%** | **1.51 cm** | **5.05 cm** |
+| ±0.5 s, 8 pixels | 18.5% | 1.25 cm | 4.28 cm |
+
+Wider neighborhoods more often include a surface boundary and fail the depth continuity check. The default recovered the largest share of masked pixels in this comparison.
+
+The two training runs share the refined cameras, images and initial point cloud. Each uses depth and normal supervision from its listed sensors. LichtFeld MRNF ran for 30,000 steps at half resolution on the RTX 5070 with a 1M Gaussian cap. Every eighth photo was held out, giving the same 93 test images. Depth used `ssi-depth` with weight 2 and normals used `camera-opencv` with weight 0.005. Map export starts from the existing refinement. Training time includes evaluation and saving. GPU utilization was logged from an idle start for each run.
+
+| Sensor input | Depth and normal export | Training and evaluation | PSNR (dB) | SSIM | LPIPS |
+|---|---:|---:|---:|---:|---:|
+| iPhone | 35.62 s | 264.88 s | 33.183 | 0.9624 | 0.0746 |
+| iPhone + Mid-360 | 53.27 s | 266.45 s | 33.166 | 0.9621 | 0.0748 |
+
+Dual LiDAR increased depth and normal coverage by 3.2 and 1.7 percentage points respectively. Its PSNR was 0.017 dB lower, within the project’s 0.1 dB training variability threshold. Each variant was trained once. The image-quality comparison covers this indoor scan and configuration.
+
 ## Mesh export
 
 The 390-view metric scan reused a 1M-Gaussian, 30,000-step LichtFeld model. Its 49 LichtFeld test views were reserved for evaluation. The other 341 cameras participated in fusion and multi-view checking. We raycast each mesh at the held-out poses and measured coverage on 2,920,948 high-confidence LiDAR reference pixels. Median and P90 absolute camera-z errors use the pixels hit by the mesh. The reference and input depths come from the same sensor. This experiment measures geometric agreement.
