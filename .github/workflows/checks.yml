@@ -35,7 +35,9 @@ jobs:
       - name: Check pipeline syntax
         run: bash -n prior-pose-refine
       - name: Run regression tests and COLMAP round-trip
-        run: python -I -B tests/test_prior_pose_refine.py -v
+        run: |
+          python -I -B tests/test_prior_pose_refine.py -v
+          python -I -B tests/test_lidar_depth.py -v
 
   mesh:
     name: Tiled mesh geometry

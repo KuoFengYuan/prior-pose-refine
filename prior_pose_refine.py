@@ -13,6 +13,7 @@ Subcommands
   restore-prior-poses  give the frames of a model with too few observations their prior pose
   report-agreement     camera-center agreement between a model and the prior poses, and the frames to inspect
   merge-points         add the prior points, mapped into a model's frame, to its SfM points
+  export-depth         export fused iPhone and Mid-360 depth and camera normals for training
   print-camera         print the camera(s) of a COLMAP model
 """
 import argparse
@@ -467,6 +468,13 @@ def cmd_merge_points(a):
           f"rotation {rotation_deg(r):.2f} deg; camera-center residual median {np.median(res) * 100:.1f} cm")
 
 
+def cmd_export_depth(a):
+    # Isolated Python omits the script directory from its import path.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from lidar_depth import export_depth
+    export_depth(Path(a.scan), Path(a.model), Path(a.dataset), read_images, read_cameras)
+
+
 def cmd_print_camera(a):
     for cid, (model, w, h, params) in read_cameras(a.model).items():
         print(f"camera {cid}: {model} {w}x{h} " + " ".join(f"{v:.6g}" for v in params))
@@ -533,6 +541,11 @@ def main():
     p = sub.add_parser("merge-points"); p.add_argument("--prior", required=True, help=prior_help)
     p.add_argument("--model", required=True); p.add_argument("--out", required=True)
     p.set_defaults(fn=cmd_merge_points)
+    p = sub.add_parser("export-depth", help="export registered metric depth and camera normals for a training dataset")
+    p.add_argument("--scan", required=True, help="original capture")
+    p.add_argument("--model", required=True, help="refined model before undistortion")
+    p.add_argument("--dataset", required=True, help="undistorted dataset with sparse/0")
+    p.set_defaults(fn=cmd_export_depth)
     p = sub.add_parser("print-camera"); p.add_argument("--model", required=True)
     p.set_defaults(fn=cmd_print_camera)
     a = ap.parse_args()

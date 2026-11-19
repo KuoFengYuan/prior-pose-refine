@@ -27,6 +27,7 @@ options
                         points3D.bin of the training dataset: merge = the triangulated points plus the
                         points of the prior model, mapped into the model's frame (default when the prior
                         model has points3D.bin), sfm = the triangulated points only (default otherwise)
+  --no-depth            skip the automatic export of registered LiDAR depth and normal maps
   --matcher covis|sequential
                         covis: pairs from the prior poses + point covisibility (default)
                         sequential: COLMAP sequential_matcher, for prior models without points
@@ -65,7 +66,7 @@ paths_overlap() {
 [[ $# -lt 2 ]] && { usage; exit 1; }
 SCAN=$(realpath -e -- "$1"); OUT=$(realpath -m -- "$2"); shift 2
 IMAGES=$SCAN/images; PRIOR=$SCAN/sparse/0; MODE=fast; ROUNDS=3; MATCHER=covis; TOP_K=25; SEQ=3
-OVERLAP=20; GPU=0; WORKERS=3; MAX_FEATURES=4096; ALIGN_MAX_ERROR=0.1; PY=${PYTHON:-python3}; FORCE=0
+OVERLAP=20; GPU=0; WORKERS=3; MAX_FEATURES=4096; ALIGN_MAX_ERROR=0.1; PY=${PYTHON:-python3}; FORCE=0; EXPORT_DEPTH=1
 CAMERA_MODEL=; BA_ITERATIONS=; INIT_POINTS=; MIN_OBS=20
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -91,6 +92,7 @@ while [[ $# -gt 0 ]]; do
     --align-max-error) ALIGN_MAX_ERROR=$2; shift 2 ;;
     --min-obs) MIN_OBS=$2; shift 2 ;;
     --python) PY=$2; shift 2 ;;
+    --no-depth) EXPORT_DEPTH=0; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage; exit 1 ;;
@@ -142,6 +144,14 @@ sys.exit(not (math.isfinite(value) and value > 0))
 PY
 if [[ -e $OUT ]]; then
   [[ $FORCE == 1 ]] || die "$OUT exists (use --force to overwrite)"
+  # Raw sensor folders, chunks and per-frame maps can be linked from the scan.
+  for source in "$SCAN"/{capture-meta.json,poses.jsonl,depth,mid360}; do
+    [[ -e $source ]] || continue
+    while IFS= read -r -d '' link; do
+      input=$(realpath -m -- "$link")
+      if paths_overlap "$OUT" "$input"; then die "OUT_DIR overlaps an input: $input"; fi
+    done < <(find -L "$source" -xtype l -print0)
+  done
   rm -rf "$OUT"
 fi
 
@@ -233,6 +243,10 @@ if [[ $INIT_POINTS == merge ]]; then
     --out "$OUT/dataset/sparse/0/points3D.bin"
 fi
 
+if (( EXPORT_DEPTH )) && [[ $IMAGES == "$(realpath -m -- "$SCAN/images")" ]]; then
+  stage export_depth "${TOOLS[@]}" export-depth --scan "$SCAN" --model "$OUT/model" --dataset "$OUT/dataset"
+fi
+
 {
   echo "== prior-pose-refine report"
   echo "mode=$MODE matcher=$MATCHER rounds=$ROUNDS camera=$CAMERA_MODEL init=$INIT_POINTS top_k=$TOP_K seq=$SEQ"
@@ -243,12 +257,16 @@ fi
   echo "agreement with the prior poses:"
   "${TOOLS[@]}" report-agreement --prior "$PRIOR" --model "$OUT/model" --min-obs "$MIN_OBS"
   [[ $INIT_POINTS == merge ]] && { echo "training init points:"; tail -1 "$LOGS/merge_points.log"; }
+  if [[ -f $LOGS/export_depth.log ]]; then tail -1 "$LOGS/export_depth.log"
+  else echo "LiDAR depth export skipped (--no-depth or alternate input images)"; fi
   awk -F'\t' 'NR>1{s+=$2} END{printf "total time: %.1f s (%d min %02d s)\n", s, s/60, s%60}' "$OUT/timing.tsv"
 } | tee "$OUT/report.txt"
 
-cat <<EOF
-
-dataset ready: $OUT/dataset
-train with, for example:
-  LichtFeld-Studio -d $OUT/dataset --max-cap 1000000
-EOF
+train=(LichtFeld-Studio -d "$OUT/dataset" --max-cap 1000000)
+if [[ -d $OUT/dataset/depth && -d $OUT/dataset/normals ]]; then
+  train+=(--use-depth-loss --depth-loss-mode ssi-depth --no-depth-auto-generate
+          --use-normal-loss --normal-loss-space camera-opencv --no-normal-auto-generate)
+fi
+printf '\ndataset ready: %s\ntrain with, for example:\n ' "$OUT/dataset"
+printf ' %q' "${train[@]}"
+printf '\n'

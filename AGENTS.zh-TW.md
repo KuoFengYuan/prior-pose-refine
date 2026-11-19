@@ -2,7 +2,7 @@
 
 [English](AGENTS.md) | **繁體中文**
 
-`prior-pose-refine` 以先驗模型(來自 ARKit 或任何其他來源的姿態、內參和 3D 點)為起點，用 COLMAP 修正相機姿態、焦距和鏡頭畸變，並輸出 3DGS 訓練資料集。流程由 `prior-pose-refine` 腳本和輔助模組 `prior_pose_refine.py` 組成。使用方式見 [README.zh-TW.md](README.zh-TW.md),方法見 [docs/method.zh-TW.md](docs/method.zh-TW.md),實驗數據見 [docs/benchmark.zh-TW.md](docs/benchmark.zh-TW.md)。
+`prior-pose-refine` 以先驗模型(來自 ARKit 或任何其他來源的姿態、內參和 3D 點)為起點，用 COLMAP 修正相機姿態、焦距和鏡頭畸變，並輸出 3DGS 訓練資料集。流程由 `prior-pose-refine` 腳本和輔助模組 `prior_pose_refine.py`、`lidar_depth.py` 組成。使用方式見 [README.zh-TW.md](README.zh-TW.md),方法見 [docs/method.zh-TW.md](docs/method.zh-TW.md),實驗數據見 [docs/benchmark.zh-TW.md](docs/benchmark.zh-TW.md)。
 
 ## 交付流程
 

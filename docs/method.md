@@ -22,6 +22,7 @@ Before removing an existing output or starting a stage, the pipeline checks opti
 | 8 | `prior_pose_refine.py restore-prior-poses` | gives images with fewer than `--min-obs` observations (default 20) their prior pose (see below) |
 | 9 | `colmap image_undistorter` | undistorts the images and writes the training dataset |
 | 10 | `prior_pose_refine.py merge-points` | maps the prior points into the model and adds them to the dataset's initial point cloud (`--init-points merge`, the default) |
+| 11 | `prior_pose_refine.py export-depth` | Fuses available iPhone and Mid-360 measurements on each undistorted training image grid and estimates camera-space normals |
 
 ## Choosing matching pairs (step 3)
 
@@ -67,6 +68,16 @@ Bundle adjustment moves the whole model, but an image without any 3D-point obser
 
 - Why 20: on the 7 earlier scans, every image had at least 96 observations, so normal images are never reset.
 - Only the observation count decides, never the size of the correction. A large correction is not necessarily wrong: on another scan ARKit drifted by up to 25 cm in three stretches, and bundle adjustment corrected them. Large corrections are only listed in the report.
+
+## Training depth and normals (step 11)
+
+Capture rows and training images are paired by relative name. The iPhone float32 metric depth is registered to the captured RGB image. Each undistorted PINHOLE pixel center is projected through the refined lens model into the original image to sample the depth by nearest neighbor. Confidence levels 1 and 2 are accepted. Invalid readings and 3×3 neighborhoods crossing a depth discontinuity are excluded.
+
+For raw Mid-360 Cartesian32 returns, fit clock offset and drift per recorded segment from packet arrival times. Apply the rig extrinsic and continuous ARKit trajectory at the return timestamps to compensate for motion. An extrinsic update is used only when the capture report marks it `applied`. Project returns within 0.5 seconds of each exposure into the camera at that exposure and keep the nearest camera-z at each pixel. This avoids accumulating separate passes through the room. Either sensor can supply a map independently. [Livox packet format](https://livox-wiki-en.readthedocs.io/en/latest/tutorials/new_product/mid360/livox_eth_protocol_mid360.html)
+
+Keep reliable iPhone depth. When both sensors provide measurements, require at least 64 overlapping pixels and a median relative depth discrepancy within 5% to accept Mid-360 fill for that frame. On smooth surfaces, a short gap can be interpolated from four or more occupied pixels within a four-pixel radius, spanning opposite quadrants with a depth range within 3 cm plus 2% of the closest depth. Reject fills that disagree with nearby phone foreground or background. Maps are at most 512 pixels wide with the training camera aspect ratio. Single-channel 16-bit PNGs store millimeters, with zero for missing data. Fully empty frames are omitted. Both output directories are staged before publication. A retry can reuse an identical published layer. This stage follows bundle adjustment.
+
+For each supported depth pixel, fit a plane to inverse depth in a 7×7 neighborhood. Convert the slopes through the undistorted intrinsics into a unit normal facing the camera. At least 60% of the neighborhood must contain valid depth. Depth span and fit residual reject occlusion boundaries and nonplanar patches. Each depth map has a matching `dataset/normals/*.png` at the same resolution. The 16-bit RGB channels encode OpenCV camera x, y and z from [−1, 1] to [0, 65535]. Unsupported normals are (32768, 32768, 32768).
 
 ## Mesh export after training
 

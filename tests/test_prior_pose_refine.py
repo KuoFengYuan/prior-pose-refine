@@ -93,6 +93,12 @@ class PipelineInputTests(unittest.TestCase):
         self.assert_rejected([], "OUT_DIR overlaps an input")
         self.assertTrue(external.is_dir())
 
+    def test_linked_raw_sensor_chunk_is_protected(self):
+        continuous = self.scan / "mid360/continuous"
+        continuous.mkdir(parents=True)
+        (continuous / "stream.mid360").symlink_to(self.marker)
+        self.assert_rejected([], "OUT_DIR overlaps an input")
+
     def test_custom_images_and_prior_are_protected(self):
         external_images = self.out / "images"
         external_images.mkdir()
