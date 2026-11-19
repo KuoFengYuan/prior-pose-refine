@@ -4,7 +4,9 @@ import subprocess
 from pathlib import Path
 
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 from scipy.spatial import cKDTree
+from PIL import Image
 
 
 def cameras(model, width):
@@ -67,6 +69,35 @@ def lidar_depth(scan, row, view, far):
     return result
 
 
+def merged_depth(directory, view, far):
+    """Read registered camera-z in millimeters on the undistorted RGB pixel grid."""
+    name = Path(view["name"])
+    if name.is_absolute() or ".." in name.parts:
+        raise ValueError(f"Expected a dataset-relative image name: {name}")
+    path = directory / name.with_suffix(".png")
+    if not path.is_file():
+        return None
+    with Image.open(path) as im:
+        if im.format != "PNG" or im.mode not in {"I;16", "I;16B", "I"}:
+            raise ValueError(f"{path}: expected a single-channel 16-bit metric depth PNG")
+        rgb_h, rgb_w = view["rgb_size"]
+        if abs(im.height - im.width * rgb_h / rgb_w) > 1:
+            raise ValueError(f"{path}: depth and undistorted camera aspect ratios differ")
+        h, w = view["size"]
+        if w == im.width and h != im.height:
+            # A native half-resolution map may round an odd camera height down.
+            K = np.array(view["K"], dtype=float)
+            K[1] *= im.height / h
+            view["K"] = K.tolist()
+            h = im.height
+            view["size"] = [h, w]
+        if (w, h) != im.size:
+            im = im.resize((w, h), Image.Resampling.NEAREST)
+        depth = np.asarray(im, dtype=np.float32) * 0.001
+    depth[depth > far] = 0
+    return depth
+
+
 def file_version(path):
     info = path.stat()
     return f"{info.st_size}-{info.st_mtime_ns}"
@@ -126,7 +157,19 @@ def render_depths(model_path, views, directory, far, binary, batch_size, expecte
             np.save(directory / f"raw-{i}.npy", torch.where(valid, z, 0).cpu().numpy())
 
 
-def filter_splats(views, directory, has_lidar):
+def bounded_fill(splat, measured):
+    """Limit Gaussian fill to small depth-continuous gaps beside metric returns."""
+    valid = measured > 0
+    if not valid.any():
+        return np.zeros_like(splat)
+    distance, indices = distance_transform_edt(~valid, return_indices=True)
+    nearby = measured[tuple(indices)]
+    keep = (~valid & (distance <= 4 * measured.shape[1] / 512)
+            & (np.abs(splat - nearby) <= 0.03 + 0.01 * nearby))
+    return np.where(keep, splat, 0)
+
+
+def filter_splats(views, directory, has_lidar, has_patch=False):
     """Require agreement in two other cameras with a nonzero physical baseline."""
     indices = [i for i, view in enumerate(views) if not view["excluded"]]
     if len(indices) < 3:
@@ -180,6 +223,11 @@ def filter_splats(views, directory, has_lidar):
         if has_lidar:
             z[y[veto], x[veto]] = 0
             np.save(directory / f"fill-{i}.npy", z)
+            if has_patch:
+                raw = np.load(directory / f"lidar-{i}.npy", mmap_mode="r")
+                patch = np.load(directory / f"patch-{i}.npy", mmap_mode="r")
+                measured = np.where(raw > 0, raw, patch)
+                np.save(directory / f"guard-{i}.npy", bounded_fill(z, measured))
     for i in indices:
         (directory / f"raw-{i}.npy").unlink()
 
@@ -215,17 +263,34 @@ def prepare(args, directory):
     if args.scan:
         rows = lidar_rows(args.scan)
         valid = 0
+        matched = 0
         for i, v in enumerate(views):
+            merged = merged_depth(args.merged_depths, v, args.max_depth) if args.merged_depths else None
             z = lidar_depth(args.scan, rows.get(v["name"]), v, args.max_depth)
             valid += bool(z.any()) and not v["excluded"]
             np.save(directory / f"lidar-{i}.npy", z)
+            if args.merged_depths:
+                if merged is None:
+                    merged = np.zeros_like(z)
+                else:
+                    matched += bool(merged.any()) and not v["excluded"]
+                    merged[z > 0] = 0
+                np.save(directory / f"patch-{i}.npy", merged)
         if not valid:
             raise ValueError("No matched non-excluded frames contain high-confidence depth")
         sources.append("lidar")
-    if args.splat:
+        if args.merged_depths:
+            if not matched:
+                raise ValueError("No non-excluded views have matching valid merged depths")
+            total = len(views) - len(excluded)
+            print(f"Valid merged depths for {matched}/{total} fusion views", flush=True)
+            sources.append("patch")
+    if args.splat and getattr(args, "source", None) != "sensor-priority":
         render_depths(args.splat, views, directory, args.max_depth, args.lichtfeld, args.batch_splats, args.model_version)
-        filter_splats(views, directory, bool(args.scan))
+        filter_splats(views, directory, bool(args.scan), bool(args.merged_depths))
         sources.append("splat")
+        if args.merged_depths:
+            sources.append("guard")
     if not sources:
         raise ValueError("Supply a --scan, --splat or both")
     image_root = args.images

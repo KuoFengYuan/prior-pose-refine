@@ -32,9 +32,21 @@ To rebuild part of a saved export in the panel, select its `views/` directory un
   --source hybrid --voxel 0.02 --bake-textures --output OUT_DIR/mesh
 ```
 
+For a scan with registered merged depth maps, select **Original depth scan** and **Merged metric depth PNGs (mm)** in the panel. **Automatic** selects **Sensor + merged depth**. The equivalent CPU export is
+
+```bash
+"$MESH_PYTHON" -I plugins/tiled_mesh/export_mesh.py export-mesh \
+  --dataset DATASET --scan SCAN_DIR --merged-depths DATASET/depth \
+  --width 512 --voxel 0.015 --tile-cells 128 \
+  --bake-textures --two-sided-textures --output OUT_DIR/mesh-measured
+```
+
+Use single-channel 16-bit PNGs containing camera-axis depth in millimeters, with zero for missing depth. Match the undistorted image grid and relative image names, changing each extension to `.png`. For example, `cam/frame.jpg` uses `cam/frame.png`. The worker samples the maps with nearest-neighbor resampling. Views missing a map retain their original high-confidence depths. At least one non-excluded view must have a valid merged map. A prepared cache containing these maps also selects `sensor-priority` automatically on rebuild. This mode uses measured geometry and native source photos without rendering Gaussian depths.
+
 - `--source splat` requires a trained Gaussian PLY or a saved training project and matching final cameras. The `.licht` path uses LichtFeld's converter. Use a training scene in the same metric frame as the camera model. A transformed, scaled or edited multi-node project needs a matching export of cameras and splats.
 - `--source lidar` uses `--scan` (omit `--splat`). It reads the capture's registered float32 camera-z depth and uint8 confidence by image name, using the per-frame RGB intrinsics scaled to the depth sensor resolution. It assumes co-located RGB-aligned depth and uses confidence level 2. Unregistered sensors require prior calibration and reprojection.
 - `--source hybrid` requires both. Measured depth takes priority. A separate fill map rejects splat estimates in pixels with valid measured depth and estimates in free space observed by nearby sensor views.
+- `--source sensor-priority-fill` is an optional trial for small openings. Prepare a cache with `--scan`, `--merged-depths` and `--splat`, then run `build-mesh --source sensor-priority-fill --tile X Y Z` with the original voxel size and cells per edge. This adds only multi-view checked Gaussian depths in empty pixels within four pixels of a measurement at width 512 (scaled with depth width). The candidate depth must agree with the nearest measurement within 3 cm plus 1% of measured depth. Rebuild the same tile with `--source sensor-priority` for comparison before committing to a full bake.
 - `--cameras DIR` selects an explicit final COLMAP model. With `--trained`, the worker looks for `cameras_refined/`, then the undistorted dataset's `sparse/0`. Use final, metric PINHOLE or SIMPLE_PINHOLE cameras. The refined distorted model in `model/` is unsuitable.
 - Defaults are a 2 cm voxel, 64 cells per tile edge, 320 pixels maximum depth width, 20 m maximum camera-z and 250,000 splats per rendering batch. Adjust `--max-depth` to the reliable capture range, `--width` to the detail supported by the views, and `--batch-splats` to the available VRAM. Halving voxel size makes a tile cover half the distance along each axis.
 - `--exclude FILE` takes one registered image name per line. Excluded views can retain sensor reference depth for evaluation. Their rendered depths and all their measurements are excluded from fusion and multi-view checks. Their photos are excluded from baking.

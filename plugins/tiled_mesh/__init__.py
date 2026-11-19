@@ -42,8 +42,12 @@ class Settings(PropertyGroup):
     dataset = StringProperty(name="Dataset (manual override)", subtype="DIR_PATH")
     cameras = StringProperty(name="Final cameras (override)", subtype="DIR_PATH")
     scan = StringProperty(name="Original depth scan", subtype="DIR_PATH")
+    merged_depths = StringProperty(name="Merged metric depth PNGs (mm)", subtype="DIR_PATH")
     destination = StringProperty(name="Export folder", subtype="DIR_PATH")
-    source = EnumProperty(name="Depth source", default="splat", items=[
+    source = EnumProperty(name="Depth source", default="auto", items=[
+        ("auto", "Automatic", "Use the selected measured depths, otherwise use the saved splat"),
+        ("sensor-priority", "Sensor + merged depth", "Fill missing raw measurements with registered metric depths"),
+        ("sensor-priority-fill", "Sensor + merged + local 3DGS fill", "Add multi-view splat depth near measured surfaces"),
         ("splat", "3DGS", "Multi-view checked Gaussian depth"),
         ("lidar", "LiDAR", "High-confidence RGB-aligned sensor depth"),
         ("hybrid", "LiDAR + 3DGS", "Use sensor evidence first")])
@@ -96,15 +100,24 @@ def model_command(s, iteration):
             cameras = str(trained / "cameras_refined")
             if not Path(cameras).is_dir():
                 raise ValueError("Choose the final COLMAP camera model in the Mesh Export tab")
-    cmd = ["export-mesh", "--trained", str(trained)]
-    if s.source != "lidar":
+    source = s.source
+    if source == "auto":
+        source = "lidar" if s.scan else "splat"
+        if s.merged_depths:
+            source = "sensor-priority"
+    cmd = ["export-mesh", "--trained", str(trained), "--source", source]
+    if source in {"hybrid", "splat", "sensor-priority-fill"}:
         cmd += ["--splat", str(project), "--model-version", f"{info.st_size}-{info.st_mtime_ns}"]
         if project.suffix.lower() == ".licht":
             cmd += ["--lichtfeld", lichtfeld_binary()]
-    if s.source != "splat":
+    if source != "splat":
         if not s.scan:
             raise ValueError("Choose the original depth scan")
         cmd += ["--scan", s.scan]
+    if source in {"sensor-priority", "sensor-priority-fill"}:
+        if not s.merged_depths:
+            raise ValueError("Choose the merged metric depth PNG directory")
+        cmd += ["--merged-depths", s.merged_depths]
     if dataset:
         cmd += ["--dataset", dataset]
     if cameras:
@@ -133,6 +146,8 @@ def launch(iteration=None, cached=False, rebake=False):
                 cmd, base = ["bake-textures", "--mesh", str(mesh)], mesh.parent
             else:
                 cmd, base = ["build-mesh"], cache.parent
+                if s.source != "auto":
+                    cmd += ["--source", s.source]
             cmd += ["--views", str(cache)]
             if s.tile.strip():
                 coords = [int(t) for t in s.tile.split()]
@@ -143,7 +158,7 @@ def launch(iteration=None, cached=False, rebake=False):
             cmd, base = model_command(s, iteration)
             cmd += ["--width", str(s.width)]
         if not rebake:
-            cmd += ["--source", s.source, "--voxel", str(s.voxel), "--tile-cells", str(s.cells)]
+            cmd += ["--voxel", str(s.voxel), "--tile-cells", str(s.cells)]
             if s.bake:
                 cmd += ["--bake-textures"]
         if rebake or s.bake:
@@ -189,6 +204,8 @@ class MeshPanel(lf.ui.Panel):
             ui.prop(s, name)
         if s.source != "splat":
             ui.prop(s, "scan")
+        if s.source in {"auto", "sensor-priority", "sensor-priority-fill"}:
+            ui.prop(s, "merged_depths")
         for name in ("destination", "voxel", "cells", "width", "bake"):
             ui.prop(s, name)
         if s.bake or s.mesh:

@@ -63,6 +63,8 @@ def main(argv=None):
             p.add_argument("--trained", type=Path, help="LichtFeld training output, including final cameras")
             p.add_argument("--cameras", type=Path, help="Explicit final COLMAP model")
             p.add_argument("--scan", type=Path, help="Original RGB-aligned Splatify-Anything capture")
+            p.add_argument("--merged-depths", type=Path,
+                           help="Registered 16-bit camera-z PNGs in millimeters, for sensor hole filling")
             p.add_argument("--splat", type=Path, help="Final Gaussian .ply or saved .licht project")
             p.add_argument("--model-version", help=argparse.SUPPRESS)
             p.add_argument("--lichtfeld", default=os.environ.get("LICHTFELD", "LichtFeld-Studio"))
@@ -75,7 +77,8 @@ def main(argv=None):
         if name in {"build-mesh", "export-mesh"}:
             p.add_argument("--voxel", type=float, default=0.02, help="Voxel edge in metres")
             p.add_argument("--tile-cells", type=int, default=64, help="Cells per tile edge (8 to 256)")
-            p.add_argument("--source", choices=["lidar", "splat", "hybrid"], default="splat")
+            p.add_argument("--source", choices=["lidar", "splat", "hybrid", "sensor-priority", "sensor-priority-fill"],
+                           help="Defaults to sensor-priority with merged depths, or the available single source")
             p.add_argument("--bake-textures", action="store_true", help="Also export textured GLB tiles")
         if name == "bake-textures":
             p.add_argument("--mesh", type=Path, required=True, help="Existing mesh directory containing mesh.json")
@@ -98,14 +101,25 @@ def main(argv=None):
     output = args.output.resolve()
     if any((p / "capture-meta.json").is_file() for p in (output, *output.parents)):
         parser.error("Choose an output outside the original scan")
-    for name in ("scan", "dataset", "views", "cameras", "images", "mesh"):
+    for name in ("scan", "dataset", "views", "cameras", "images", "mesh", "merged_depths"):
         path = getattr(args, name, None)
         if path and output.is_relative_to(path.resolve()):
             parser.error(f"Choose an output outside the {name} directory")
+    if getattr(args, "merged_depths", None):
+        if not args.scan:
+            parser.error("--merged-depths requires --scan")
+        if not args.merged_depths.is_dir():
+            parser.error("--merged-depths must be an existing directory")
     if args.command == "export-mesh":
-        if args.source in {"hybrid", "lidar"} and not args.scan:
+        if args.source is None:
+            args.source = "lidar" if args.scan and not args.splat else "splat"
+            if args.merged_depths:
+                args.source = "sensor-priority"
+        if args.source in {"sensor-priority", "sensor-priority-fill"} and not args.merged_depths:
+            parser.error(f"{args.source} requires --merged-depths")
+        if args.source in {"hybrid", "lidar", "sensor-priority", "sensor-priority-fill"} and not args.scan:
             parser.error(f"{args.source} requires --scan")
-        if args.source in {"hybrid", "splat"} and not args.splat:
+        if args.source in {"hybrid", "splat", "sensor-priority-fill"} and not args.splat:
             parser.error(f"{args.source} requires --splat")
     publish(args.output, args)
 

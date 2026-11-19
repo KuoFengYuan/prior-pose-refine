@@ -73,3 +73,5 @@ Bundle adjustment moves the whole model, but an image without any 3D-point obser
 The optional LichtFeld worker reuses the final camera poses, including training pose refinement when available. Depth is integrated in metric tiles sharing one voxel lattice. The confidence, multi-view agreement and cell ownership rules are in the [mesh export guide](mesh.md).
 
 For photo baking, the worker checks depth at triangle centers and foreground occlusion at the corners, then maps the selected undistorted photo into a tile-local UV atlas.
+
+When registered merged depths are available, each view first keeps its high-confidence raw returns. The merged layer fills empty pixels. The worker accumulates the two layers separately. At each grid sample with support from at least two raw views it uses the raw distance estimate. Otherwise it accepts the merged estimate if at least two views support it. The photo visibility test uses the same per-pixel depth priority.
