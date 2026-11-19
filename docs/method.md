@@ -67,3 +67,7 @@ Bundle adjustment moves the whole model, but an image without any 3D-point obser
 
 - Why 20: on the 7 earlier scans, every image had at least 96 observations, so normal images are never reset.
 - Only the observation count decides, never the size of the correction. A large correction is not necessarily wrong: on another scan ARKit drifted by up to 25 cm in three stretches, and bundle adjustment corrected them. Large corrections are only listed in the report.
+
+## Mesh export after training
+
+The optional LichtFeld worker reuses the final camera poses, including training pose refinement when available. Depth is integrated in metric tiles sharing one voxel lattice. The confidence, multi-view agreement and cell ownership rules are in the [mesh export guide](mesh.md).
