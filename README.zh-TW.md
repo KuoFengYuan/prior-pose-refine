@@ -186,7 +186,7 @@ OUT_DIR/
 
 ### 選用的 mesh 匯出
 
-訓練後可在 LichtFeld 的 **Mesh Export** 分頁或命令列使用 LiDAR、3DGS 渲染深度或兩者融合，匯出可獨立載入的公尺座標三角網格。可以先用 4 cm voxel，檢查留出深度誤差與覆蓋率後再決定是否提高解析度。[安裝、選項與單塊重建](docs/mesh.zh-TW.md)。
+訓練後可在 LichtFeld 的 **Mesh Export** 分頁或命令列使用 LiDAR、3DGS 渲染深度或兩者融合，匯出可獨立載入的公尺座標三角網格。可先用 2 cm voxel，把去畸變照片烘焙到各塊 GLB 保留紋理細節。調整貼圖解析度時可沿用深度快取與幾何。[安裝、選項與單塊重建](docs/mesh.zh-TW.md)。
 
 ## 7. 選項
 
@@ -221,7 +221,7 @@ prior-pose-refine SCAN_DIR OUT_DIR [options]
 
 ## 8. 怎麼判斷結果好不好
 
-檢查匯出的 mesh 時，請一起看留出影格的光軸深度誤差，以及 mesh 命中高信心深度像素的比例。[Mesh 實測](docs/benchmark.zh-TW.md#mesh-匯出)列出兩項數值。
+檢查匯出的 mesh 時，請一起看留出影格的光軸深度誤差，以及 mesh 命中高信心深度像素的比例。烘焙後可從 `textures.json` 查看照片覆蓋的 mesh 面積比例，`timings.json` 則列出各階段耗時。[Mesh 實測](docs/benchmark.zh-TW.md#mesh-匯出)。
 
 看 `OUT_DIR/report.txt`。以下是一份 390 張影像的掃描於 2026-11-18 重跑的報告，可以當作「正常」的參考值:
 
@@ -290,6 +290,7 @@ frames more than 10 cm from their prior pose after the similarity: 0
 | 第三輪 BA 耗時與舊版不同 | 查看 `report.txt` 的 `ba_iteration_caps` 與 `timing.tsv` 的 `bundle_adjust_r2`。手動指定的 `--ba-iterations` 會套用到每輪。 |
 | GPU 記憶體不足 | 減少 `--gpu-workers`,例如改成 1 |
 | 磁碟空間不足 | 把 `OUT_DIR` 放在空間足夠的磁碟；確認結果後刪除 `work/` |
+| 貼圖出現灰色區域 | 查看 `textures.json` 的照片覆蓋面積，確認選取的照片與最終相機相符。 |
 | Mesh 匯出顯示 `No observed surface` | 檢查最終相機座標、深度範圍、可見表面的影格數，以及指定的區塊索引。[Mesh 匯出說明](docs/mesh.zh-TW.md)。 |
 
 ## 11. 運作方式

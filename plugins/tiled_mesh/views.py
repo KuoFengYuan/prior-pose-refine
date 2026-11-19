@@ -20,7 +20,7 @@ def cameras(model, width):
         h = max(1, round(camera.height * w / camera.width))
         K = camera.calibration_matrix().copy()
         K[:2] *= np.array([w / camera.width, h / camera.height])[:, None]
-        views.append(dict(name=image.name, K=K.tolist(), size=[h, w],
+        views.append(dict(name=image.name, K=K.tolist(), size=[h, w], rgb_size=[camera.height, camera.width],
                           w2c=image.cam_from_world().matrix().tolist()))
     if not views:
         raise ValueError("The camera model contains no registered images")
@@ -228,4 +228,10 @@ def prepare(args, directory):
         sources.append("splat")
     if not sources:
         raise ValueError("Supply a --scan, --splat or both")
-    (directory / "views.json").write_text(json.dumps(dict(views=views, sources=sources)))
+    image_root = args.images
+    if not image_root and dataset:
+        image_root = dataset / config.get("dataset", {}).get("images", "images")
+    metadata = dict(views=views, sources=sources)
+    if image_root:
+        metadata["image_root"] = str(image_root.resolve())
+    (directory / "views.json").write_text(json.dumps(metadata))

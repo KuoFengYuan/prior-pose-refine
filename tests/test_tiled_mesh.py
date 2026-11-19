@@ -6,11 +6,14 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import numpy as np
+from PIL import Image
 from plyfile import PlyData
+import trimesh
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins/tiled_mesh"))
 from export_mesh import main
 from fusion import surface
+from textures import Photos, choose_views
 from views import filter_splats, lidar_depth
 
 
@@ -68,6 +71,51 @@ class MeshTest(unittest.TestCase):
         vertices, _ = surface(field, valid, np.zeros(3), 1)
         self.assertTrue((vertices[:, 0] <= 2).all())
         np.testing.assert_allclose(vertices[:, 2], 2.5)
+
+    def test_rebake_preserves_faces_and_projected_photo_orientation(self):
+        # Each RGB channel encodes a calibrated photo coordinate; the holdout has no photo.
+        images = self.root / "images"
+        images.mkdir()
+        y, x = np.indices((64, 64))
+        rgb = np.stack([4*x, 4*y, np.zeros_like(x)], axis=-1).astype("u1")
+        for frame in self.frames:
+            frame["w2c"] = np.eye(4)[:3].tolist()
+            frame["rgb_size"] = [64, 64]
+            if not frame["excluded"]:
+                Image.fromarray(rgb).save(images / frame["name"], format="PNG")
+        (self.views / "views.json").write_text(json.dumps(dict(
+            views=self.frames, sources=["lidar"], image_root=str(images))))
+        meta, _ = self.run_mesh("geometry", 16)
+        tile = max(meta["tiles"], key=lambda t: t["faces"])
+        output = self.root / "textures"
+        main(["bake-textures", "--mesh", str(self.root / "geometry"), "--views", str(self.views),
+              "--tile", *map(str, tile["tile"]), "--output", str(output)])
+        summary = json.loads((output / "textures.json").read_text())
+        record, = summary["tiles"]
+        scene = trimesh.load_scene(output / record["file"], process=False)
+        self.assertEqual(sum(len(part.faces) for part in scene.geometry.values()), tile["faces"])
+        self.assertGreater(summary["observed_area_fraction"], 0.6)
+        checked = 0
+        for part in scene.geometry.values():
+            photo = np.asarray(part.visual.material.baseColorTexture)
+            h, w = photo.shape[:2]
+            uv = part.visual.uv[part.faces].mean(axis=1)
+            color = photo[np.floor((1-uv[:, 1])*h).astype(int), np.floor(uv[:, 0]*w).astype(int), :3]
+            supported = color[:, 2] == 0
+            xyz = part.triangles_center[supported]
+            expected = (20*xyz[:, :2]/xyz[:, 2:] + 8)*16 - 2
+            np.testing.assert_allclose(color[supported, :2], expected, atol=2.1)
+            checked += len(expected)
+        self.assertGreater(checked, 0)
+
+    def test_back_face_fallback_requires_close_depth(self):
+        photos = Photos(self.views, self.root, "lidar")
+        tri = np.array([[[-0.01, -0.01, 0.63], [0.01, -0.01, 0.63], [0, 0.01, 0.63]]])
+        normal = np.array([[0., 0., 1.]])
+        self.assertEqual(choose_views(photos, tri, normal, 0.01, 2).item(), -1)
+        self.assertIn(choose_views(photos, tri, -normal, 0.01, 2, reverse=True).item(), [0, 1, 2])
+        tri[:, :, 2] += 0.025
+        self.assertEqual(choose_views(photos, tri, -normal, 0.01, 2, reverse=True).item(), -1)
 
     def test_lidar_confidence_and_camera_rays(self):
         (self.root / "depth").mkdir()

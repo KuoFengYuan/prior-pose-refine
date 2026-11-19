@@ -186,7 +186,7 @@ The metrics are written to `OUT_DIR/train/metrics_report.txt`, and ground-truth/
 
 ### Optional mesh export
 
-After training, the LichtFeld **Mesh Export** tab or standalone worker can fuse LiDAR, rendered splat depth or both into independent, metric triangle tiles. Start with a 4 cm voxel and check held-out depth and coverage before choosing a finer resolution. See [installation, options and single-tile rebuilds](docs/mesh.md).
+After training, the LichtFeld **Mesh Export** tab or standalone worker can fuse LiDAR, rendered splat depth or both into independent, metric triangle tiles. Start with a 2 cm voxel. Bake undistorted photos into the GLB tiles to retain texture detail. The depth cache and geometry can be reused when changing texture resolution. See [installation, options and single-tile rebuilds](docs/mesh.md).
 
 ## 7. Options
 
@@ -221,7 +221,7 @@ The defaults are the best settings found in the experiments; change them only to
 
 ## 8. Checking the result
 
-For a mesh export, inspect held-out camera-z error and the fraction of high-confidence depth pixels hit by the mesh. The [mesh benchmark](docs/benchmark.md#mesh-export) reports both.
+For a mesh export, inspect held-out camera-z error and the fraction of high-confidence depth pixels hit by the mesh. For a baked result, `textures.json` gives the fraction of mesh surface area covered by photos and `timings.json` lists stage times. [Mesh benchmark](docs/benchmark.md#mesh-export).
 
 Read `OUT_DIR/report.txt`. This is the report of a 390-image scan rerun on 2026-11-18, as a reference for normal values:
 
@@ -290,6 +290,7 @@ The default `fast` mode assumes the prior poses are roughly right and only need 
 | Third-round BA timing differs from an older run | Check `ba_iteration_caps` in `report.txt` and `bundle_adjust_r2` in `timing.tsv`. An explicit `--ba-iterations` applies to all rounds. |
 | GPU out of memory | lower `--gpu-workers`, for example to 1 |
 | disk full | put `OUT_DIR` on a disk with more space; delete `work/` once the result is checked |
+| Textured tiles show gray patches | Inspect photographic area coverage in `textures.json` and confirm that the chosen photos and final camera model match. |
 | Mesh worker reports `No observed surface` | Check final camera coordinates, depth range, the number of views seeing the surface, and the selected tile key. See the [mesh guide](docs/mesh.md). |
 
 ## 11. How it works

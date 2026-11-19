@@ -71,3 +71,5 @@ Bundle adjustment moves the whole model, but an image without any 3D-point obser
 ## Mesh export after training
 
 The optional LichtFeld worker reuses the final camera poses, including training pose refinement when available. Depth is integrated in metric tiles sharing one voxel lattice. The confidence, multi-view agreement and cell ownership rules are in the [mesh export guide](mesh.md).
+
+For photo baking, the worker checks depth at triangle centers and foreground occlusion at the corners, then maps the selected undistorted photo into a tile-local UV atlas.
